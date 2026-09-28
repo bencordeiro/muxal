@@ -29,6 +29,10 @@ feature is added or changed, update the matching entry here in the same change**
 - **Drag-to-dock split (Zed-style)** — drag a tab onto a pane edge to pull it out
   into a new split, or onto the center to add it as a tab; drag a pane by its
   title bar to relocate the whole pane, with a highlighted drop zone.
+  Rearranging never resizes the panes you didn't touch: dividers stay anchored,
+  the dropped pane shares the drop target's region, and the span it vacates is
+  absorbed where it left — so undoing a drag lands back on the exact previous
+  split without nudging anything.
 - **Swap panes** — drop a dragged pane on another pane's center to swap their
   positions.
 - **Per-project focus** — switching away from a project and back restores the
@@ -546,8 +550,28 @@ feature is added or changed, update the matching entry here in the same change**
 
 - **Settings modal** — sections for Appearance, Editor, Behavior, Agents,
   Runners, Snippets, Loops, Projects, and Keybindings.
-- **Themes** — ~22 bundled themes with a switcher (Catppuccin, Gruvbox, Tokyo
-  Night, Solarized, Ayu, Everforest, and more).
+- **Themes** — 19 curated choices: Default Light/Dark, Gruvbox Light/Dark,
+  Ayu Light/Dark, Catppuccin Latte/Frappe, Alduin, Everforest Dark,
+  Fahrenheit, Molokai Dark, Spaceduck, Tokyo Dark, Twilight Grey, Liquid
+  Spaceglass, Porcelain, Ember Observatory, and Mainframe. Fahrenheit adds red accents;
+  Spaceduck pairs plum surfaces with golden focus accents, orchid, and turquoise;
+  Tokyo Dark adds electric blue, ice-cyan active tabs, and sakura-pink syntax on
+  deep indigo. Tokyo consolidates the former Night/Storm/Moon variants (saved
+  selections migrate automatically). Adventure is removed; saved Adventure
+  selections fall back to Default Dark.
+- **Mainframe** — black terminal backgrounds with phosphor-green text, neutral
+  charcoal chrome, gray labels and borders, and restrained green focus accents.
+  Editor syntax stays green with amber literals; ANSI/status colors remain
+  distinct for errors, warnings, and other terminal output.
+- **Liquid Spaceglass** — a procedural navy/teal/violet space backdrop, sparse
+  fixed stars, translucent blue glaze, and fine luminous glass edges in terminal
+  panes, with translucent chrome and opaque menus for readability. The effect is
+  rendered inside the app, independent of desktop transparency or compositor blur;
+  explicit terminal application backgrounds still paint normally.
+- **Original palettes** — Porcelain fills the cool-light gap with blue-white
+  surfaces, petrol-blue controls, and copper syntax accents. Ember Observatory
+  brings warm aubergine surfaces, amber focus accents, and jade strings. Each has
+  coordinated editor, terminal ANSI, selection, status, and chrome colors.
 - **Keyboard-confirmable dialogs** — every warning/confirmation dialog (close
   tab/pane, quit, pop-out close, delete confirms) takes keyboard focus the
   moment it opens: **Enter confirms, Escape cancels**, no mouse needed. Focus

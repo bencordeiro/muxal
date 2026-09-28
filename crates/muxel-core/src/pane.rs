@@ -717,6 +717,10 @@ pub fn move_into_split(
     } else {
         target
     };
+    // A sole-tab source pane collapses when its tab leaves: give its span to
+    // the drop target's branch so untouched panes keep their exact sizes
+    // (mirrors move_tab_to).
+    transfer_vanishing_leaf_size(tree, &pd, &pt);
     if !remove(tree, dragged) {
         return false;
     }
@@ -781,6 +785,9 @@ pub fn move_pane_beside(
         Some(node @ PaneNode::Leaf(_)) => node.clone(),
         _ => return false,
     };
+    // The source pane leaves its old split entirely: hand its span to the drop
+    // target's branch so untouched panes keep their exact sizes.
+    transfer_vanishing_span(tree, &src_path, &tgt_path);
     // Detach the source leaf node (collapses its parent split if left singular).
     {
         let Some(root) = tree.as_mut() else {
@@ -973,6 +980,28 @@ fn transfer_vanishing_leaf_size(
     source_path: &[usize],
     target_path: &[usize],
 ) {
+    // Only a single-tab source leaf collapses when its tab leaves.
+    let source_is_sole_tab = tree
+        .as_ref()
+        .and_then(|r| r.get_at_path(source_path))
+        .and_then(PaneNode::tabs)
+        .is_some_and(|(tabs, _)| tabs.len() == 1);
+    if !source_is_sole_tab {
+        return;
+    }
+    transfer_vanishing_span(tree, source_path, target_path);
+}
+
+/// Give the source leaf's split span to the sibling branch that holds the drop
+/// target when the two sit adjacent under the source's parent. Call right
+/// before the source vanishes: without it the vacated span is re-proportioned
+/// across every remaining sibling and untouched panes jump in size (the
+/// "left pane stretches out" bug when drag-rearranging panes).
+fn transfer_vanishing_span(
+    tree: &mut Option<PaneNode>,
+    source_path: &[usize],
+    target_path: &[usize],
+) {
     let Some((&source_index, source_parent)) = source_path.split_last() else {
         return;
     };
@@ -988,13 +1017,6 @@ fn transfer_vanishing_leaf_size(
     let Some(root) = tree.as_mut() else {
         return;
     };
-    let source_is_sole_tab = root
-        .get_at_path(source_path)
-        .and_then(PaneNode::tabs)
-        .is_some_and(|(tabs, _)| tabs.len() == 1);
-    if !source_is_sole_tab {
-        return;
-    }
     let Some(PaneNode::Split {
         children, sizes, ..
     }) = root.get_at_path_mut(source_parent)
@@ -1440,6 +1462,154 @@ mod tests {
             false
         ));
         assert_eq!(tree.as_ref().unwrap().collect_instances(), vec![b, c, a]);
+    }
+
+    #[test]
+    fn move_pane_beside_under_adjacent_sibling_keeps_first_pane_width() {
+        let (a, b, c) = (id(), id(), id());
+        let mut tree = Some(PaneNode::Split {
+            direction: SplitDirection::Horizontal,
+            sizes: vec![50.0, 25.0, 25.0],
+            children: vec![PaneNode::leaf(a), PaneNode::leaf(b), PaneNode::leaf(c)],
+        });
+
+        // Drag the third pane below the second (the "C under B" unshuffle).
+        assert!(move_pane_beside(
+            &mut tree,
+            c,
+            b,
+            SplitDirection::Vertical,
+            false
+        ));
+
+        let Some(PaneNode::Split {
+            sizes, children, ..
+        }) = tree.as_ref()
+        else {
+            panic!("expected the outer split");
+        };
+        // The untouched left pane keeps exactly its 50; the middle column
+        // absorbs the vacated span and splits it with the dropped pane.
+        assert_eq!(sizes, &[50.0, 50.0]);
+        assert_eq!(children[0].tabs(), Some((&[a][..], 0)));
+        let PaneNode::Split {
+            direction,
+            sizes: inner,
+            children: ic,
+        } = &children[1]
+        else {
+            panic!("expected the stacked column");
+        };
+        assert_eq!(*direction, SplitDirection::Vertical);
+        assert_eq!(inner, &[1.0, 1.0]);
+        assert_eq!(ic[0].tabs(), Some((&[b][..], 0)));
+        assert_eq!(ic[1].tabs(), Some((&[c][..], 0)));
+    }
+
+    #[test]
+    fn move_pane_beside_shuffling_siblings_keeps_first_pane_width() {
+        let (a, b, c) = (id(), id(), id());
+        let mut tree = Some(PaneNode::Split {
+            direction: SplitDirection::Horizontal,
+            sizes: vec![50.0, 25.0, 25.0],
+            children: vec![PaneNode::leaf(a), PaneNode::leaf(b), PaneNode::leaf(c)],
+        });
+
+        // Swap the two right-hand panes: the left pane must not budge.
+        assert!(move_pane_beside(
+            &mut tree,
+            b,
+            c,
+            SplitDirection::Horizontal,
+            false
+        ));
+
+        let Some(PaneNode::Split {
+            sizes, children, ..
+        }) = tree.as_ref()
+        else {
+            panic!("expected a flat row");
+        };
+        assert_eq!(sizes, &[50.0, 25.0, 25.0]);
+        assert_eq!(children[0].tabs(), Some((&[a][..], 0)));
+        assert_eq!(children[1].tabs(), Some((&[c][..], 0)));
+        assert_eq!(children[2].tabs(), Some((&[b][..], 0)));
+    }
+
+    #[test]
+    fn move_pane_beside_back_restores_original_sizes() {
+        let (a, b, c) = (id(), id(), id());
+        let mut tree = Some(PaneNode::Split {
+            direction: SplitDirection::Horizontal,
+            sizes: vec![50.0, 25.0, 25.0],
+            children: vec![PaneNode::leaf(a), PaneNode::leaf(b), PaneNode::leaf(c)],
+        });
+        assert!(move_pane_beside(
+            &mut tree,
+            c,
+            b,
+            SplitDirection::Vertical,
+            false
+        ));
+        // …and back out to the right of b: the exact original layout returns.
+        assert!(move_pane_beside(
+            &mut tree,
+            c,
+            b,
+            SplitDirection::Horizontal,
+            false
+        ));
+
+        let Some(PaneNode::Split {
+            sizes, children, ..
+        }) = tree.as_ref()
+        else {
+            panic!("expected a flat row");
+        };
+        assert_eq!(sizes, &[50.0, 25.0, 25.0]);
+        assert_eq!(children[0].tabs(), Some((&[a][..], 0)));
+        assert_eq!(children[1].tabs(), Some((&[b][..], 0)));
+        assert_eq!(children[2].tabs(), Some((&[c][..], 0)));
+    }
+
+    #[test]
+    fn move_into_split_under_adjacent_sibling_keeps_first_pane_width() {
+        let (a, b, c) = (id(), id(), id());
+        let mut tree = Some(PaneNode::Split {
+            direction: SplitDirection::Horizontal,
+            sizes: vec![50.0, 25.0, 25.0],
+            children: vec![PaneNode::leaf(a), PaneNode::leaf(b), PaneNode::leaf(c)],
+        });
+
+        // Drag the middle pane's only tab above the third pane's tab.
+        assert!(move_into_split(
+            &mut tree,
+            b,
+            c,
+            SplitDirection::Vertical,
+            true
+        ));
+
+        let Some(PaneNode::Split {
+            sizes, children, ..
+        }) = tree.as_ref()
+        else {
+            panic!("expected the outer split");
+        };
+        assert_eq!(sizes, &[50.0, 50.0]);
+        assert_eq!(children[0].tabs(), Some((&[a][..], 0)));
+        let PaneNode::Split {
+            direction,
+            sizes: inner,
+            children: ic,
+        } = &children[1]
+        else {
+            panic!("expected the stacked column");
+        };
+        assert_eq!(*direction, SplitDirection::Vertical);
+        assert_eq!(inner, &[1.0, 1.0]);
+        assert_eq!(ic[0].tabs(), Some((&[b][..], 0)));
+        assert_eq!(ic[1].tabs(), Some((&[c][..], 0)));
     }
 
     #[test]
