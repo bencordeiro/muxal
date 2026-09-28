@@ -247,6 +247,21 @@ jobs:
       # rust-toolchain.toml pins the channel, so `targets:` above lands on the
       # wrong toolchain — add them to the pinned one that cargo actually uses.
       - run: rustup target add x86_64-apple-darwin aarch64-apple-darwin
+      # macOS runner images ship several full Xcode installs plus simulator and
+      # Android SDKs; a two-arch release build and DMG staging need that room.
+      # Keep the selected Xcode (codesign/xcrun resolve through it), drop the
+      # rest.
+      - name: Free disk before building
+        run: |
+          set -eux
+          df -h /
+          current="$(xcode-select -p)"
+          for app in /Applications/Xcode_*.app; do
+            case "$current" in "$app"/*) ;; *) sudo rm -rf "$app" ;; esac
+          done
+          sudo rm -rf /Library/Developer/CoreSimulator
+          sudo rm -rf "$HOME/Library/Android"
+          df -h /
       - uses: Swatinem/rust-cache@v2
       - name: Build both architectures
         run: |
