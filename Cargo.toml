@@ -1,13 +1,13 @@
 [workspace]
 resolver = "2"
-members = ["crates/muxel", "crates/muxel-core", "crates/muxel-store", "crates/muxel-terminal", "crates/muxel-tray"]
+members = ["crates/muxal", "crates/muxal-core", "crates/muxal-store", "crates/muxal-terminal", "crates/muxal-tray"]
 
 [workspace.package]
 version = "0.4.0"
 edition = "2024"
 license = "GPL-3.0-only"
 authors = ["ProjectHax LLC"]
-repository = "https://github.com/projecthax/muxel"
+repository = "https://github.com/projecthax/muxal"
 
 [workspace.dependencies]
 # --- GPUI (Zed's UI framework) ---
@@ -31,10 +31,10 @@ gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "
 gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", rev = "3cb3cc139619ce704387b69deb17822b0fc22497", package = "gpui-component-assets" }
 
 # --- workspace-internal crates (added in later phases) ---
-muxel-core = { path = "crates/muxel-core" }
-muxel-terminal = { path = "crates/muxel-terminal" }
-muxel-store = { path = "crates/muxel-store" }
-muxel-tray = { path = "crates/muxel-tray" }
+muxal-core = { path = "crates/muxal-core" }
+muxal-terminal = { path = "crates/muxal-terminal" }
+muxal-store = { path = "crates/muxal-store" }
+muxal-tray = { path = "crates/muxal-tray" }
 
 # --- shared third-party deps ---
 anyhow = "1"
@@ -44,7 +44,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 
-# Muxel is an interactive GUI even in local builds. Plain Cargo dev mode leaves
+# Muxal is an interactive GUI even in local builds. Plain Cargo dev mode leaves
 # GPUI/Taffy primitive arithmetic and layout helpers uninlined; sustained
 # terminal output can then spend an entire core recomputing layout. Keep local
 # crates cheap to compile while optimizing third-party layout/rendering code.

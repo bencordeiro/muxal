@@ -1,10 +1,10 @@
-# Contributing to muxel
+# Contributing to muxal
 
-Thanks for your interest in muxel!
+Thanks for your interest in muxal!
 
 ## License of contributions (please read)
 
-muxel is **dual-licensed**: GPL-3.0 for open-source use, plus a commercial
+muxal is **dual-licensed**: GPL-3.0 for open-source use, plus a commercial
 license offered by **ProjectHax LLC** (see [LICENSING.md](LICENSING.md)). For
 that to remain possible, ProjectHax LLC needs the right to ship every
 contribution under **both** licenses.
@@ -20,7 +20,7 @@ other material — **to this project, you agree that:**
    to **relicense** it under other terms, including ProjectHax LLC's commercial
    license.
 
-This inbound grant is what lets muxel stay open under the GPL while ProjectHax
+This inbound grant is what lets muxal stay open under the GPL while ProjectHax
 LLC can also offer a commercial license. If you can't agree to it, please don't
 submit a contribution.
 
@@ -33,9 +33,9 @@ run the full gate and fix everything it reports:
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings   # warnings are errors
 cargo test --workspace
-cargo build -p muxel
+cargo build -p muxal
 ```
 
 `AGENTS.md` documents the workspace layout and project conventions. Keep pure,
-testable logic in `muxel-core`, and add a `FEATURES.md` entry when you add or
+testable logic in `muxal-core`, and add a `FEATURES.md` entry when you add or
 change a user-facing feature.

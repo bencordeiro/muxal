@@ -57,11 +57,11 @@ jobs:
             libasound2-dev libvulkan-dev libdbus-1-dev \
             libwebkit2gtk-4.1-dev libgtk-3-dev
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release -p muxel
+      - run: cargo build --release -p muxal
       - uses: actions/upload-artifact@v7
         with:
           name: linux-build-bin-${{ matrix.arch }}
-          path: target/release/muxel
+          path: target/release/muxal
           if-no-files-found: error
 
   # ----------------------------------------------------------------------------
@@ -86,7 +86,7 @@ jobs:
         with:
           name: linux-build-bin-${{ matrix.arch }}
           path: target/release
-      - run: chmod +x target/release/muxel
+      - run: chmod +x target/release/muxal
       - name: Install packaging deps
         run: |
           # Runtime libs so cargo-deb's `$auto` dependency detection
@@ -101,20 +101,20 @@ jobs:
       - run: cargo binstall -y cargo-deb cargo-generate-rpm
 
       - name: Build .deb
-        run: cargo deb --no-build -p muxel
+        run: cargo deb --no-build -p muxal
 
       - name: Build .rpm
-        run: cargo generate-rpm -p crates/muxel
+        run: cargo generate-rpm -p crates/muxal
 
       - name: Build .tar.gz
         run: |
           set -eux
-          stage="muxel-linux-${{ matrix.arch }}"
+          stage="muxal-linux-${{ matrix.arch }}"
           mkdir -p "$stage"
-          cp target/release/muxel "$stage/"
+          cp target/release/muxal "$stage/"
           cp README.md LICENSE "$stage/"
-          cp packaging/muxel.desktop "$stage/"
-          cp crates/muxel/assets/muxel.svg "$stage/"
+          cp packaging/muxal.desktop "$stage/"
+          cp crates/muxal/assets/muxal.svg "$stage/"
           tar -czf "$stage.tar.gz" "$stage"
 
       - name: Build AppImage
@@ -127,7 +127,7 @@ jobs:
           chmod +x "linuxdeploy-${arch}.AppImage"
           mkdir -p AppDir
 
-          # muxel hard-links the system GTK3 + WebKitGTK (the `muxel --browser`
+          # muxal hard-links the system GTK3 + WebKitGTK (the `muxal --browser`
           # helper window). WebKit can't be carried inside an AppImage — it
           # spawns fixed-path helper processes — so the *whole* GTK/GLib stack
           # has to come from the host, not just its top layer.
@@ -172,9 +172,9 @@ jobs:
 
           "./linuxdeploy-${arch}.AppImage" \
             --appdir AppDir \
-            --executable target/release/muxel \
-            --desktop-file packaging/muxel.desktop \
-            --icon-file crates/muxel/assets/muxel.png \
+            --executable target/release/muxal \
+            --desktop-file packaging/muxal.desktop \
+            --icon-file crates/muxal/assets/muxal.png \
             "${exclude_args[@]}" \
             --output appimage
 
@@ -187,10 +187,10 @@ jobs:
           fi
 
           # linuxdeploy names it after the desktop "Name"; normalize it.
-          mv muxel*-"${arch}".AppImage "muxel-linux-${arch}.AppImage" 2>/dev/null \
-            || mv muxel*.AppImage "muxel-linux-${arch}.AppImage"
+          mv muxal*-"${arch}".AppImage "muxal-linux-${arch}.AppImage" 2>/dev/null \
+            || mv muxal*.AppImage "muxal-linux-${arch}.AppImage"
 
-      # Headless package sanity check. This fork has no `muxel ctl` subcommand
+      # Headless package sanity check. This fork has no `muxal ctl` subcommand
       # (the upstream control module was removed), so instead of exercising ctl
       # we verify each packaged binary directly: executable, right ELF machine,
       # and every shared library resolvable on a stock runner. A GUI launch
@@ -209,32 +209,32 @@ jobs:
             if ldd "$bin" | grep -q "not found"; then ldd "$bin"; exit 1; fi
           }
           dpkg-deb -x target/debian/*.deb deb-root
-          check deb-root/usr/bin/muxel
+          check deb-root/usr/bin/muxal
 
           mkdir rpm-root
           (cd rpm-root && rpm2cpio ../target/generate-rpm/*.rpm | cpio -idm --quiet)
-          check rpm-root/usr/bin/muxel
+          check rpm-root/usr/bin/muxal
 
           # AppImage: extract the payload and check the bundled binary likewise.
           export APPIMAGE_EXTRACT_AND_RUN=1
-          "./muxel-linux-${arch}.AppImage" --appimage-extract >/dev/null
-          check squashfs-root/usr/bin/muxel
+          "./muxal-linux-${arch}.AppImage" --appimage-extract >/dev/null
+          check squashfs-root/usr/bin/muxal
 
       - uses: actions/upload-artifact@v7
         with:
-          name: muxel-linux-packages-${{ matrix.arch }}
+          name: muxal-linux-packages-${{ matrix.arch }}
           if-no-files-found: error
           path: |
             target/debian/*.deb
             target/generate-rpm/*.rpm
-            muxel-linux-${{ matrix.arch }}.tar.gz
-            muxel-linux-${{ matrix.arch }}.AppImage
+            muxal-linux-${{ matrix.arch }}.tar.gz
+            muxal-linux-${{ matrix.arch }}.AppImage
 
   # ----------------------------------------------------------------------------
   # macOS — a single UNIVERSAL app (Intel x86_64 + Apple Silicon aarch64 in one
   # binary via `lipo`). Both arches build on Apple Silicon — aarch64 natively,
   # x86_64 cross-compiled (Apple's toolchain handles x86_64<->arm64 within macOS),
-  # avoiding the Intel macos-13 runner Apple is retiring. Bundles muxel.app and
+  # avoiding the Intel macos-13 runner Apple is retiring. Bundles muxal.app and
   # ships one .dmg + .zip that runs on any Mac.
   # ----------------------------------------------------------------------------
   macos:
@@ -250,34 +250,34 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Build both architectures
         run: |
-          cargo build --release --target x86_64-apple-darwin -p muxel
-          cargo build --release --target aarch64-apple-darwin -p muxel
+          cargo build --release --target x86_64-apple-darwin -p muxal
+          cargo build --release --target aarch64-apple-darwin -p muxal
       - name: Install icon tooling
         run: brew install librsvg
-      - name: Build universal muxel.app
+      - name: Build universal muxal.app
         run: |
           set -eux
-          app="muxel.app"
+          app="muxal.app"
           mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
           # Fuse the two arch binaries into one universal Mach-O.
-          lipo -create -output "$app/Contents/MacOS/muxel" \
-            target/x86_64-apple-darwin/release/muxel \
-            target/aarch64-apple-darwin/release/muxel
-          lipo -info "$app/Contents/MacOS/muxel"
+          lipo -create -output "$app/Contents/MacOS/muxal" \
+            target/x86_64-apple-darwin/release/muxal \
+            target/aarch64-apple-darwin/release/muxal
+          lipo -info "$app/Contents/MacOS/muxal"
           cp packaging/macos/Info.plist "$app/Contents/Info.plist"
 
           # SVG -> .icns (standard iconset sizes + @2x retina variants).
-          mkdir -p muxel.iconset
+          mkdir -p muxal.iconset
           for s in 16 32 128 256 512; do
-            rsvg-convert -w "$s" -h "$s" crates/muxel/assets/muxel.svg \
-              -o "muxel.iconset/icon_${s}x${s}.png"
+            rsvg-convert -w "$s" -h "$s" crates/muxal/assets/muxal.svg \
+              -o "muxal.iconset/icon_${s}x${s}.png"
             d=$((s * 2))
-            rsvg-convert -w "$d" -h "$d" crates/muxel/assets/muxel.svg \
-              -o "muxel.iconset/icon_${s}x${s}@2x.png"
+            rsvg-convert -w "$d" -h "$d" crates/muxal/assets/muxal.svg \
+              -o "muxal.iconset/icon_${s}x${s}@2x.png"
           done
-          iconutil -c icns muxel.iconset -o "$app/Contents/Resources/muxel.icns"
+          iconutil -c icns muxal.iconset -o "$app/Contents/Resources/muxal.icns"
       # The two per-arch release trees (multi-GB GPUI builds each) are now fused
-      # into muxel.app via lipo, so they're dead weight — deleting them frees the
+      # into muxal.app via lipo, so they're dead weight — deleting them frees the
       # headroom hdiutil needs to build the .dmg (packaging previously ran the
       # runner out of disk at `hdiutil create`).
       - name: Free disk before packaging
@@ -296,14 +296,14 @@ jobs:
           MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
           MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
           MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
-        run: scripts/sign-macos.sh muxel.app "muxel-macos-universal"
+        run: scripts/sign-macos.sh muxal.app "muxal-macos-universal"
       - uses: actions/upload-artifact@v7
         with:
-          name: muxel-macos-universal
+          name: muxal-macos-universal
           if-no-files-found: error
           path: |
-            muxel-macos-universal.dmg
-            muxel-macos-universal.zip
+            muxal-macos-universal.dmg
+            muxal-macos-universal.zip
 
   # ----------------------------------------------------------------------------
   # Collect every package and attach to the GitHub Release (tag pushes only).
@@ -319,7 +319,7 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
-          pattern: muxel-*
+          pattern: muxal-*
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# One-time install of muxel as this user's "main" app:
+# One-time install of muxal as this user's "main" app:
 #   1. release-build the binary
-#   2. install it to ~/.local/bin/muxel (atomic swap; safe while main runs)
+#   2. install it to ~/.local/bin/muxal (atomic swap; safe while main runs)
 #   3. register the launcher icon + .desktop entry pointing at that path
 #
 #   scripts/install.sh
-#   MUXEL_BIN_DIR=/opt/bin scripts/install.sh   # override the install dir
+#   MUXAL_BIN_DIR=/opt/bin scripts/install.sh   # override the install dir
 #
 # Day-to-day afterwards:
 #   scripts/dev.sh      # isolated dev instance (safe inside a main pane)
@@ -13,22 +13,22 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-dest_dir="${MUXEL_BIN_DIR:-$HOME/.local/bin}"
-dest="$dest_dir/muxel"
+dest_dir="${MUXAL_BIN_DIR:-$HOME/.local/bin}"
+dest="$dest_dir/muxal"
 
 echo "building release binary…" >&2
-# A running main may still hold target/release/muxel (the old launcher pointed
+# A running main may still hold target/release/muxal (the old launcher pointed
 # there). Unlink it first — the running process keeps its inode — or rustc's
 # write fails with ETXTBSY.
-rm -f "$repo_root/target/release/muxel"
-(cd "$repo_root" && cargo build --release -p muxel)
+rm -f "$repo_root/target/release/muxal"
+(cd "$repo_root" && cargo build --release -p muxal)
 mkdir -p "$dest_dir"
 # Copy-then-rename: overwriting a *running* executable in place fails with
 # ETXTBSY, but a rename swaps the directory entry and leaves the running
 # process on its old inode.
-tmp="$(mktemp "$dest_dir/.muxel.XXXXXX")"
+tmp="$(mktemp "$dest_dir/.muxal.XXXXXX")"
 trap 'rm -f "$tmp"' EXIT
-cp "$repo_root/target/release/muxel" "$tmp"
+cp "$repo_root/target/release/muxal" "$tmp"
 chmod +x "$tmp"
 mv -f "$tmp" "$dest"
 trap - EXIT
@@ -36,7 +36,11 @@ echo "installed binary: $dest" >&2
 
 case ":$PATH:" in
 *":$dest_dir:"*) ;;
-*) echo "note: $dest_dir is not on your PATH — add it to run 'muxel' by name." >&2 ;;
+*) echo "note: $dest_dir is not on your PATH — add it to run 'muxal' by name." >&2 ;;
 esac
 
-MUXEL_EXEC="$dest" "$repo_root/scripts/install-desktop.sh" --no-build
+MUXAL_EXEC="$dest" "$repo_root/scripts/install-desktop.sh" --no-build
+
+# Clean up pre-rename (muxel) install leftovers so no launcher entry can point
+# at a stale binary.
+rm -f "$dest_dir/muxel" "$HOME/.local/share/applications/muxel.desktop"

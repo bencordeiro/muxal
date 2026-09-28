@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=muxal
+GenericName=Terminal Multiplexer
+Comment=Multi-agent terminal multiplexer
+Exec=muxal
+Icon=muxal
+Terminal=false
+Categories=Development;TerminalEmulator;
+Keywords=terminal;multiplexer;agent;claude;tmux;
+StartupNotify=true
+StartupWMClass=muxal

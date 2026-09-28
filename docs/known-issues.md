@@ -6,7 +6,7 @@ and verified.
 ## Terminal glyph spacing / malformed rendering on Arch Linux — FIXED in v0.4.0
 
 - **Status:** fixed — the field fix from the Arch/Omarchy incident report is
-  ported into this repo (`crates/muxel-terminal/src/font.rs`), so release
+  ported into this repo (`crates/muxal-terminal/src/font.rs`), so release
   builds carry it and Arch users never patch their own tree.
 - **Root cause:** gpui's `resolve_font` silently substitutes a proportional UI
   face when the requested family (old hardcoded default: DejaVu Sans Mono)

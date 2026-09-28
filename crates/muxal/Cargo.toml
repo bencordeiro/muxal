@@ -1,0 +1,127 @@
+[package]
+name = "muxal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "A multi-agent terminal multiplexer for managing many AI coding agents across projects."
+
+[[bin]]
+name = "muxal"
+path = "src/main.rs"
+
+[dependencies]
+env_logger = "0.11"
+gpui.workspace = true
+gpui_platform.workspace = true
+gpui-component.workspace = true
+gpui-component-assets.workspace = true
+muxal-core.workspace = true
+muxal-terminal.workspace = true
+muxal-store.workspace = true
+muxal-tray.workspace = true
+anyhow.workspace = true
+log.workspace = true
+uuid.workspace = true
+serde_json.workspace = true
+# `muxal ctl` requests reach the UI thread over this (already in the tree via
+# muxal-terminal).
+async-channel = "2.3"
+notify-rust = "4"
+# debug-embed: always bake files into the binary, even in debug builds.
+# Without this, rust-embed reads icons from disk under CARGO_MANIFEST_DIR
+# (e.g. the primary user's .cargo/git/checkouts/gpui-component-*/assets). That breaks
+# secondary Windows identities (AgentWorker via runas) which cannot read the
+# primary user's profile — title-bar min/max/close and other gpui-component
+# icons render as empty gray plates. Feature unification applies this to
+# gpui-component-assets as well.
+rust-embed = { version = "8", features = ["debug-embed"] }
+# Decode the embedded app icon (PNG) to RGBA for the Windows/macOS tray icon.
+image = { version = "0.25", default-features = false, features = ["png"] }
+# Detect the OS UI locale at startup for i18n (already resolved transitively).
+sys-locale = "0.3"
+# Gitignore-aware file walk for the Ctrl+P search palette.
+ignore = "0.4"
+# Local wall-clock time for scheduled Loops (time-of-day + interval firing).
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+# `setrlimit(RLIMIT_NOFILE)` at startup — see `raise_open_file_limit` in main.rs.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# --- Built-in browser (system webview via wry; no bundled Chromium) ---
+# macOS/Windows: an embedded in-pane webview via gpui-component's gpui-wry
+# (WKWebView / WebView2 as a native child of the gpui window). Pinned to the
+# same gpui-component rev so the `gpui` types unify.
+# Present pump (see `spawn_present_pump` in main.rs): the same `windows` crate
+# version gpui_windows already pins, so this adds nothing new to the tree.
+[target.'cfg(target_os = "windows")'.dependencies]
+webview2-com = "=0.38.2"
+windows-webview = { package = "windows", version = "0.61" }
+windows = { version = "0.57", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+gpui-wry = { git = "https://github.com/longbridge/gpui-component", rev = "3cb3cc139619ce704387b69deb17822b0fc22497" }
+# The same lb-wry release gpui-wry pins, so the `wry` types unify.
+wry = { version = "0.53.3", package = "lb-wry" }
+
+# Linux: gpui can't host a WebKitGTK child (no GTK loop; XEmbed is X11-only), so
+# the browser is a separate muxal-managed window: `muxal --browser <url>` runs a
+# WebKitGTK window via wry + gtk (see browser_helper.rs). lb-wry is the same wry
+# lineage gpui-wry uses; gtk 0.18 is the matching gtk-rs release.
+[target.'cfg(target_os = "linux")'.dependencies]
+wry = { version = "0.53.3", package = "lb-wry" }
+gtk = "0.18"
+
+# Embeds the .exe icon (see build.rs); Windows build-host only, so it never
+# affects the Linux/macOS builds.
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
+# --- Linux .deb packaging (cargo-deb) ---
+# Asset source paths are resolved relative to THIS crate's directory, so files
+# at the workspace root are reached with `../../`. The release workflow builds
+# the binary first and runs `cargo deb --no-build -p muxal`.
+[package.metadata.deb]
+maintainer = "ProjectHax LLC"
+copyright = "2026, ProjectHax LLC"
+section = "utils"
+priority = "optional"
+depends = "$auto"
+extended-description = """\
+muxal is a terminal multiplexer for managing many AI coding agents (Claude, \
+Ollama, and others) across multiple projects, with split panes, tmux/worktree \
+integration, and one-click task runners."""
+assets = [
+    ["../../target/release/muxal", "usr/bin/muxal", "755"],
+    ["../../packaging/muxal.desktop", "usr/share/applications/muxal.desktop", "644"],
+    ["assets/muxal.svg", "usr/share/icons/hicolor/scalable/apps/muxal.svg", "644"],
+    ["assets/muxal.png", "usr/share/icons/hicolor/256x256/apps/muxal.png", "644"],
+    ["../../README.md", "usr/share/doc/muxal/README.md", "644"],
+    ["../../LICENSE", "usr/share/doc/muxal/LICENSE", "644"],
+]
+
+# --- Linux .rpm packaging (cargo-generate-rpm) ---
+# Unlike cargo-deb, cargo-generate-rpm resolves `source` paths relative to the
+# directory it is invoked from. The release workflow runs it from the workspace
+# root: `cargo generate-rpm -p crates/muxal`.
+[package.metadata.generate-rpm]
+summary = "Multi-agent terminal multiplexer for AI coding agents"
+assets = [
+    { source = "target/release/muxal", dest = "/usr/bin/muxal", mode = "755" },
+    { source = "packaging/muxal.desktop", dest = "/usr/share/applications/muxal.desktop", mode = "644" },
+    { source = "crates/muxal/assets/muxal.svg", dest = "/usr/share/icons/hicolor/scalable/apps/muxal.svg", mode = "644" },
+    { source = "crates/muxal/assets/muxal.png", dest = "/usr/share/icons/hicolor/256x256/apps/muxal.png", mode = "644" },
+    { source = "README.md", dest = "/usr/share/doc/muxal/README.md", mode = "644", doc = true },
+    { source = "LICENSE", dest = "/usr/share/doc/muxal/LICENSE", mode = "644", doc = true },
+]

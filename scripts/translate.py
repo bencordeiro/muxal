@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-scripts/translate.py — muxel i18n catalog generator.
+scripts/translate.py — muxal i18n catalog generator.
 
 Extract English UI strings from the Rust source (the `t("…")`, `tf("…", …)`, and
 `tn("…", "…", …)` calls) and translate them into per-language JSON catalogs under
-crates/muxel/assets/i18n/ via an LLM CLI (claude/sonnet by default; opencode too).
+crates/muxal/assets/i18n/ via an LLM CLI (claude/sonnet by default; opencode too).
 
 Usage:
   python3 scripts/translate.py                 # extract en.json + translate all langs
@@ -56,14 +56,14 @@ SUPPORTED_LANGS = {
 
 # Terms/product names the model must NOT translate.
 DO_NOT_TRANSLATE = (
-    "muxel, tmux, SSH, git, worktree, AppImage, PTY, Claude, opencode, Amp, gh, "
+    "muxal, tmux, SSH, git, worktree, AppImage, PTY, Claude, opencode, Amp, gh, "
     "sshpass, GPL-3.0, ProxyJump, ServerAliveInterval, StrictHostKeyChecking, "
     "Ctrl, Shift, Alt, Tab, {{input}}, KEY=VALUE, and any file-path-like token "
-    "(e.g. .muxel/MEMORY.md, ~/.config)"
+    "(e.g. .muxal/MEMORY.md, ~/.config)"
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-CATALOG_DIR = REPO_ROOT / "crates" / "muxel" / "assets" / "i18n"
+CATALOG_DIR = REPO_ROOT / "crates" / "muxal" / "assets" / "i18n"
 
 # `t("…")` / `tf("…", …)`: first string-literal arg. (tn handled separately.)
 _T_RE = re.compile(r'\b(?:tf|t)\s*\(\s*"((?:[^"\\]|\\.)*)"', re.DOTALL)
@@ -246,7 +246,7 @@ def translate_lang(code, name, keys, backend, model, batch_size, force, retries=
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Generate muxel i18n catalogs via an LLM CLI.")
+    ap = argparse.ArgumentParser(description="Generate muxal i18n catalogs via an LLM CLI.")
     ap.add_argument("--backend", choices=["claude", "opencode"], default="claude")
     ap.add_argument("--model", default="sonnet", help="claude model alias (claude backend)")
     ap.add_argument("--lang", default="all", help='comma-separated codes, or "all"')

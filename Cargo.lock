@@ -4631,7 +4631,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "muxel"
+name = "muxal"
 version = "0.4.0"
 dependencies = [
  "anyhow",
@@ -4649,10 +4649,10 @@ dependencies = [
  "lb-wry",
  "libc",
  "log",
- "muxel-core",
- "muxel-store",
- "muxel-terminal",
- "muxel-tray",
+ "muxal-core",
+ "muxal-store",
+ "muxal-terminal",
+ "muxal-tray",
  "notify-rust",
  "rust-embed",
  "serde_json",
@@ -4665,7 +4665,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "muxel-core"
+name = "muxal-core"
 version = "0.4.0"
 dependencies = [
  "base64",
@@ -4675,20 +4675,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "muxel-store"
+name = "muxal-store"
 version = "0.4.0"
 dependencies = [
  "anyhow",
  "chrono",
  "directories",
  "log",
- "muxel-core",
+ "muxal-core",
  "serde_json",
  "toml 1.1.2+spec-1.1.0",
 ]
 
 [[package]]
-name = "muxel-terminal"
+name = "muxal-terminal"
 version = "0.4.0"
 dependencies = [
  "alacritty_terminal",
@@ -4698,7 +4698,7 @@ dependencies = [
  "gpui",
  "libc",
  "log",
- "muxel-core",
+ "muxal-core",
  "parking_lot",
  "portable-pty",
  "serde_json",
@@ -4706,7 +4706,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "muxel-tray"
+name = "muxal-tray"
 version = "0.4.0"
 dependencies = [
  "ksni",

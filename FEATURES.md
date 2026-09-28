@@ -1,10 +1,10 @@
-# muxel — Features
+# muxal — Features
 
-muxel is a GPUI-based, multi-agent terminal multiplexer: run several coding agents
+muxal is a GPUI-based, multi-agent terminal multiplexer: run several coding agents
 (Claude, opencode, Amp, …) and shells side by side in a tiled, tabbed workspace
 with first-class git worktrees, agent status tracking, and notifications.
 
-This file is the canonical catalogue of what muxel can do. **When a user-facing
+This file is the canonical catalogue of what muxal can do. **When a user-facing
 feature is added or changed, update the matching entry here in the same change**
 (see `AGENTS.md`).
 
@@ -112,7 +112,7 @@ feature is added or changed, update the matching entry here in the same change**
   are discovered at startup, so npm-global and mise-managed agents (`pi`,
   `claude`, `opencode`, …) resolve under a GUI launch as well.
 - **Terminal font auto-resolution** — the terminal never renders with a
-  silently-substituted proportional face: muxel resolves a family that is
+  silently-substituted proportional face: muxal resolves a family that is
   installed and verifiably fixed-pitch (advance probe), warns when the
   configured family had to be substituted, and falls back per-glyph to
   installed mono faces only. Fixes the spaced-out glyph rendering on distros
@@ -122,15 +122,15 @@ feature is added or changed, update the matching entry here in the same change**
   fallback shell can't start, the pane shows the failure in place (the toolbar
   Restart retries) and the error lands in the NOTIFICATIONS feed.
 - **Session resume** — resume-capable agents reopen their prior conversation after
-  a muxel restart. Two shapes, both configurable per preset:
-  - **Host-minted** (Claude, Grok): `session_id_flag` + `resume_flag` — muxel
+  a muxal restart. Two shapes, both configurable per preset:
+  - **Host-minted** (Claude, Grok): `session_id_flag` + `resume_flag` — muxal
     launches with `--session-id` the first time and `--resume` on restart.
   - **Agent-minted** (Codex): only `resume_flag` (`resume`) — first launch is bare;
-    muxel captures the UUID Codex publishes for that pane, validates it against
+    muxal captures the UUID Codex publishes for that pane, validates it against
     `~/.codex/sessions` before restart, and relaunches as `codex resume <id>`. Multiple Codex
     panes can share a project without resuming one another's conversations.
   **Conversation switches stick** — an agent can swap its conversation inside a live
-  pane (`/resume`, `/clear`, a fork) without restarting the PTY, and muxel rebinds the
+  pane (`/resume`, `/clear`, a fork) without restarting the PTY, and muxal rebinds the
   pane to what's actually on screen instead of the conversation it launched.
   Claude panes learn the switch from a process-local `SessionStart` hook keyed to the
   pane; Codex panes learn it from a later OSC title. Both are accepted only after the
@@ -141,14 +141,14 @@ feature is added or changed, update the matching entry here in the same change**
 - **Broadcast** — `Ctrl+Shift+I` opens a broadcast bar; type a line and Enter (or
   Send) writes it + a newline to every agent pane in the active project at once.
 - **Shared project memory** — opt-in per project: agents are told (via their system
-  prompt) to `grep` and add durable lessons to a `.muxel/MEMORY.md` file shared
-  across every agent and run in that project. muxel creates the file, git-ignores
-  `.muxel/`, and agents get its path in a `MUXEL_MEMORY_FILE` env var. Enable it
+  prompt) to `grep` and add durable lessons to a `.muxal/MEMORY.md` file shared
+  across every agent and run in that project. muxal creates the file, git-ignores
+  `.muxal/`, and agents get its path in a `MUXAL_MEMORY_FILE` env var. Enable it
   on a project (sidebar right-click or
   Settings → Projects); a memory button on the project row opens the manager. Plain
   shells are skipped.
 - **Self-maintaining memory** — each fact is one `##` section carrying a machine
-  meta line (id, dates, tags). muxel keeps the file **most-relevant-first** (recently
+  meta line (id, dates, tags). muxal keeps the file **most-relevant-first** (recently
   used entries and 📌 pinned ones rise to the top), **timestamps** every entry,
   **auto-purges** un-pinned entries unused for 30 days, and **caps** it at 40
   un-pinned entries (evicting the least-recently-used) — so it stays small and
@@ -166,7 +166,7 @@ feature is added or changed, update the matching entry here in the same change**
   or **done**, color-coded (blue / gray / amber / green) on the tab pill, sidebar
   icon, dashboard, and notification dots. A marker-based agent whose turn finishes
   is held at **done** until the agent works again — even if it never rang the bell —
-  and that completion survives a muxel restart. Focusing the pane marks its
+  and that completion survives a muxal restart. Focusing the pane marks its
   notification read without rewriting lifecycle state or age. Sidebar badges include
   coarse age while work is blocked or done, show recent idle activity briefly
   (`idle · 12m`), omit ordinary middle age, and call out panes idle for three days
@@ -193,7 +193,7 @@ feature is added or changed, update the matching entry here in the same change**
   pane) can't fake a finished turn.
 - **Auto-continue** — an agent that lays out a multi-phase plan sometimes finishes
   the first phase and just stops, waiting, with the todo list still half-unchecked.
-  Each agent pane has an **Auto** toggle in its header: while it's on, muxel watches
+  Each agent pane has an **Auto** toggle in its header: while it's on, muxal watches
   the pane and, whenever the agent goes idle with work still to do, types `continue`
   and presses Enter for you. It fires when it can see pending work — Claude's `☐`
   checkboxes or an "N pending" count — or when the agent voluntarily stops to check
@@ -279,12 +279,12 @@ feature is added or changed, update the matching entry here in the same change**
 - **Managed from the main window** — a toolbar "Loops" dropdown lists your loops:
   click one to run it now, the pencil to edit it in Settings → Loops, or "New
   loop…" to create one. Schedules survive restarts (a daily-at whose time passed
-  while closed fires once on next launch). Loops fire only while muxel is running.
+  while closed fires once on next launch). Loops fire only while muxal is running.
 
 ## Built-in browser
 
 - **System webview, not bundled Chromium** — preview links agents print (or a
-  locally hosted dev site) without leaving muxel. Uses the OS engine (WKWebView on
+  locally hosted dev site) without leaving muxal. Uses the OS engine (WKWebView on
   macOS, WebKitGTK on Linux), so it's light on disk and memory.
 - **macOS: an embedded pane** — ctrl+click a URL and it opens as a browser pane
   beside the terminal, with an address bar and Back / Forward / Reload buttons;
@@ -292,10 +292,10 @@ feature is added or changed, update the matching entry here in the same change**
   you are), not the pane's original URL. The URL persists and restores with the
   workspace. Clicking into the page makes it the active pane — so paste and the
   toolbar act on the browser, not on whichever pane you were in before — and hands
-  it the keyboard; muxel's own shortcuts keep working until you click into a page.
+  it the keyboard; muxal's own shortcuts keep working until you click into a page.
   The toolbar can open the current page in the system browser. Native page context menus remain usable.
 - **Linux: a separate browser window** — gpui can't embed WebKitGTK, so links open
-  in a muxel-managed browser window (a crash-isolated `muxel --browser` process);
+  in a muxal-managed browser window (a crash-isolated `muxal --browser` process);
   if WebKit isn't installed it falls back to the system browser with a note.
 - **Browser as a preset** — the built-in **Browser** preset opens a web-browser
   pane; pick it anywhere you pick an agent (the toolbar's new-pane dropdown, or
@@ -309,9 +309,9 @@ feature is added or changed, update the matching entry here in the same change**
 ## Notifications
 
 - **Desktop notifications** — fired when an agent finishes a turn or needs attention
-  (a blocked prompt / the terminal bell), but only while muxel's window isn't
+  (a blocked prompt / the terminal bell), but only while muxal's window isn't
   focused — no toast pops over the app you're already looking at (the in-app feed
-  still records it). Clicking the notification raises muxel and jumps to the pane
+  still records it). Clicking the notification raises muxal and jumps to the pane
   that fired it.
 - **In-app NOTIFICATIONS sidebar** — a category above PROJECTS collecting agent
   events **and** all app messages (git results and save errors —
@@ -322,9 +322,9 @@ feature is added or changed, update the matching entry here in the same change**
   dismissable, with a clear-all. Collected even when desktop notifications are off.
 - **Controls** — an enable/disable toggle and a "send test notification" button.
 - **System tray** (Settings → Behavior → "Minimize to the system tray on close") —
-  closing the window iconifies muxel to a tray icon instead of quitting. The tray
+  closing the window iconifies muxal to a tray icon instead of quitting. The tray
   menu lists every agent with its live status and the most recent notifications;
-  clicking one restores muxel and focuses that project + pane, and "Quit" exits for
+  clicking one restores muxal and focuses that project + pane, and "Quit" exits for
   real. Linux uses StatusNotifierItem (needs an AppIndicator/SNI host — standard on
   KDE, the AppIndicator extension on GNOME); macOS uses the status-bar item. (Stock
   GPUI can only iconify, so the window still appears in the
@@ -365,13 +365,13 @@ feature is added or changed, update the matching entry here in the same change**
   `http(s)` URL, an OSC 8 hyperlink (e.g. `ls --hyperlink` or agent markdown
   links), a literal Markdown inline link, a `file://` URI, or a **file path**
   (absolute, `~/`, or relative to the pane's working directory).
-  Local files open in a muxel editor pane; only paths that exist are
+  Local files open in a muxal editor pane; only paths that exist are
   clickable, and a trailing `:line:col` is understood. `Ctrl`/`Cmd`+hover
   underlines the link and shows a pointing-hand cursor (Ctrl/Cmd down re-hit-tests
   without requiring a mouse move).
 - **Links in new tabs** — middle-clicking a terminal link opens it without stealing
   terminal focus; browser target=_blank, window.open, Ctrl+click, and middle-click
-  requests stay in the source project and open as Muxel tabs. Right-clicking a
+  requests stay in the source project and open as Muxal tabs. Right-clicking a
   terminal link opens link actions instead of copying or pasting through the PTY.
 - **Focus reporting** — forwards focus in/out to the PTY (DECSET 1004) so agents
   know when their pane is active.
@@ -395,7 +395,7 @@ feature is added or changed, update the matching entry here in the same change**
   of being reported as a crash, since the OS gives a signalled child no exit code
   of its own and it would otherwise be indistinguishable from `exit(1)`.
 - **Event log** — pane lifecycle events (every exit with its code and signal, every
-  close, auto-closes, PTY read errors) are appended to `muxel.log` in the data dir
+  close, auto-closes, PTY read errors) are appended to `muxal.log` in the data dir
   (rotated at 1 MB), so "why did this pane disappear?" is answerable even when
   the app runs with stderr discarded.
 - **Content inset** — a small margin around the grid so a too-wide TUI truncates
@@ -403,17 +403,17 @@ feature is added or changed, update the matching entry here in the same change**
 - **Key routing** — `Tab` / `Shift+Tab` go to the focused terminal rather than
   moving UI focus. `Shift+Enter` / `Alt+Enter` send `ESC CR` so agent TUIs
   (Grok, etc.) can insert a soft newline; plain `Enter` stays CR (submit).
-- **Agent-first plain Ctrl+letter** — muxel app shortcuts that are plain
+- **Agent-first plain Ctrl+letter** — muxal app shortcuts that are plain
   `Ctrl+A`…`Ctrl+Z` (no Shift) do **not** fire while a terminal is focused, so
   agents receive them as normal C0 chords (Claude `Ctrl+S` stash, shell
-  `Ctrl+R`, …). Muxel chrome prefers `Ctrl+Shift+*`. Exceptions that stay global
+  `Ctrl+R`, …). Muxal chrome prefers `Ctrl+Shift+*`. Exceptions that stay global
   in a terminal: `Ctrl+T` (new tab). `Ctrl+P` is special-cased (palette only when
   no terminal is focused). Extra chords can still be listed under Settings →
   Keybindings → terminal passthrough.
 - **Ctrl+P shared with the agent** — the command palette is on `Ctrl+Shift+P`
   (always), while `Ctrl+P` opens it only when no terminal is focused — so a focused
   agent (e.g. opencode) receives it. Deselect the pane (click the toolbar) and
-  `Ctrl+P` reaches muxel again.
+  `Ctrl+P` reaches muxal again.
 
 ## Editor & tools
 
@@ -480,7 +480,7 @@ feature is added or changed, update the matching entry here in the same change**
 ## Sidebar & projects
 
 - **Empty-workspace onboarding** — a fresh workspace shows a centered get-started
-  screen (the muxel mark, an **Add a project** folder picker, and the
+  screen (the muxal mark, an **Add a project** folder picker, and the
   keyboard-shortcuts chord) in the work area until the first project is added.
 - **Project list** — projects with live per-agent status rows; collapse a project.
 - **Branch label** — each project row shows its git repo's current branch with a
@@ -498,7 +498,7 @@ feature is added or changed, update the matching entry here in the same change**
   project → **Move up** / **Move down** (disabled at the ends) for an explicit,
   discoverable alternative; the order persists. Swap/move instances between panes
   from the sidebar.
-- **Instance names** — muxel persists each program's changing auto-title after a
+- **Instance names** — muxal persists each program's changing auto-title after a
   short debounce, so restored panes and resume views keep their useful names.
   Custom inline names remain a separate override; clearing one falls back to the
   latest auto-title. Rename opens with the current value selected in a full-width
@@ -510,7 +510,7 @@ feature is added or changed, update the matching entry here in the same change**
   fully hidden. A floating pill at the left edge brings the sidebar back without
   leaving fullscreen; `F11` again exits and restores the previous sidebar state.
 - **Multi-monitor** — right-click a project → **Open on display N** to give it a
-  full muxel window (toolbar + panes) on that monitor; switch projects and panes
+  full muxal window (toolbar + panes) on that monitor; switch projects and panes
   there like in the main window. It opens with the **sidebar hidden** — the window
   exists to show one project, so the project list starts out of the way; its title
   bar's toggle (or Ctrl+Shift+B) brings the sidebar back for that window alone.
@@ -538,7 +538,7 @@ feature is added or changed, update the matching entry here in the same change**
 - **Workspaces** — multiple workspaces, each with its own projects + layout; a startup workspace
   selector.
 - **Single instance per workspace** — each workspace is locked while open, so two
-  muxel windows can run side by side on **different** workspaces but never the same
+  muxal windows can run side by side on **different** workspaces but never the same
   one (which would clobber its layout). Picking a workspace another window already
   holds is refused in the selector with an inline "in use" note; pick a different one
   or close the other window. The lock releases when you switch workspaces or on exit
@@ -604,16 +604,16 @@ feature is added or changed, update the matching entry here in the same change**
   its prompt with no foreground command and no other tabs — since closing it
   loses nothing.
 - **Local tmux by default** — "New agents run in a tmux session" defaults **on**
-  whenever `tmux` is installed, so panes survive a muxel restart and reattach; the
+  whenever `tmux` is installed, so panes survive a muxal restart and reattach; the
   toggle greys out and has no effect when tmux isn't found.
-- **Agents survive a stray `pkill`** — muxel starts the tmux server itself, from a
+- **Agents survive a stray `pkill`** — muxal starts the tmux server itself, from a
   command line naming no project, so an agent running `pkill -f <project>` (to clear
   its own dev server) can't match the *shared* server and kill every session with it.
   Such a `pkill` reaches only that pane's tmux client: the session and the agent keep
-  running, and muxel **reattaches the pane automatically** — you see it blink, not die.
+  running, and muxal **reattaches the pane automatically** — you see it blink, not die.
   A host has one tmux server shared by every session on it.
 - **Killed tmux sessions come back** — if the tmux session (or the whole server) dies
-  anyway, the pane doesn't tombstone: muxel recreates the session and relaunches the
+  anyway, the pane doesn't tombstone: muxal recreates the session and relaunches the
   agent with `--resume`, so a resume-capable agent picks its conversation back up where
   it left off (tmux scrollback is the only casualty). A deliberate `tmux kill-session`,
   and an agent simply quitting, still close the pane normally. The feed says which
@@ -639,28 +639,28 @@ feature is added or changed, update the matching entry here in the same change**
 
 - **Opt-in focus diagnostics** — the UI profiler correlates GPUI focus-path
   loss with redraw requests and native window ownership. WebView children
-  must descend from a registered Muxel window; unrelated WRY apps remain
+  must descend from a registered Muxal window; unrelated WRY apps remain
   external. Records use fixed class buckets and opaque pane/project UUIDs,
   with no terminal text, URLs, titles, or paths.
 - **Cross-platform** — Linux (x86_64 + arm64) and macOS (Intel + Apple Silicon).
 - **Desktop integration** — app icon and a `.desktop` launcher entry (also the
   notification icon).
-- **Host window controls** — muxel defers minimize/maximize/close to the host
+- **Host window controls** — muxal defers minimize/maximize/close to the host
   OS's window decorations whenever the window manager provides them (X11, and
   Wayland compositors with `xdg-decoration`), instead of painting a duplicate
   set. On compositors that force client-side decorations (e.g. GNOME Wayland)
-  muxel draws its own controls so buttons are never missing. The in-app top bar
+  muxal draws its own controls so buttons are never missing. The in-app top bar
   is a single merged row: pane/agent controls (preset, Run task, Loops,
   Snippets, tmux/worktree/restart/close, git-diff) starting at the sidebar
   divider, then Search pushed right alongside the workspace switcher,
   dashboard, notifications, and Settings (outermost). Merging the old separate
   toolbar into the title bar frees a full row of vertical space for panes.
-- **Linux: self-cleaning AppImage mounts** — a muxel instance run from an
+- **Linux: self-cleaning AppImage mounts** — a muxal instance run from an
   AppImage that crashes or is SIGKILLed can't unmount its squashfuse mount, and a
   dead leftover mount makes any filesystem scan (a desktop monitor's periodic
   `df`) stall in the kernel FUSE layer — a periodic Wayland cursor stutter that
-  worsens the longer the machine is up. On launch muxel reaps such dead
-  `/tmp/.mount_muxel-*` leftovers (leaving live mounts from other running
+  worsens the longer the machine is up. On launch muxal reaps such dead
+  `/tmp/.mount_muxal-*` leftovers (leaving live mounts from other running
   instances alone), so they can't accumulate.
 - **Packaging & CI** — release packaging per OS/arch on native runners (.deb /
   .rpm / AppImage / .tar.gz for Linux, .dmg / .zip for macOS) and continuous

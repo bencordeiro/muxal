@@ -3,11 +3,11 @@
 *.swp
 .DS_Store
 
-# muxel runtime data written during local dev
-/.muxel-dev/
+# muxal runtime data written during local dev
+/.muxal-dev/
 
 # local performance captures and derived analysis; never publish trace data
-/.muxel-local/
+/.muxal-local/
 /.perf-analysis/
 /term-prof*.log
 /ui-prof*.log
@@ -37,5 +37,9 @@
 
 # Python bytecode (scripts/)
 __pycache__/
-.muxel/
+.muxal/
 issues1.txt
+
+# Dev sandboxes (local test state; both the pre- and post-rename names)
+.muxel-dev/
+.muxal-dev/

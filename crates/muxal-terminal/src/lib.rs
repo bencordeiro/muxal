@@ -1,0 +1,35 @@
+//! muxal-terminal — embedded terminal sessions for muxal.
+//!
+//! - [`TerminalSession`] owns a PTY child + the `alacritty_terminal` emulator.
+//! - [`TerminalView`] is the gpui entity that renders and drives one session.
+
+// `Arc<TerminalSession>` is shared only on the GPUI main thread (between the view
+// and its element); the session is intentionally not `Send + Sync` (the PTY
+// master isn't `Sync`). Same trade-off gpui-component makes for its entities.
+#![allow(clippy::arc_with_non_send_sync)]
+
+mod colors;
+mod element;
+mod font;
+mod keymap;
+mod links;
+mod listener;
+mod present_flag;
+mod profile;
+mod search;
+mod session;
+mod spaceglass;
+mod view;
+pub use font::{fallback_families, resolve_mono_family};
+
+pub use colors::TerminalPalette;
+pub use links::{FileLinkTarget, file_target_from_uri, file_uri, path_from_file_uri};
+pub use present_flag::{mark_present_needed, take_present_needed};
+pub use profile::startup_event;
+pub use session::{CommandSpec, PtyChunk, TerminalSession};
+pub use spaceglass::paint_spaceglass;
+pub use view::{
+    AgentStatus, OpenLink, OpenLinkBackground, TerminalFocusObserver, TerminalFocusProfile,
+    TerminalLaunch, TerminalMouseMode, TerminalNotifyCause, TerminalView, clean_agent_title,
+    paste_clipboard_into_session,
+};

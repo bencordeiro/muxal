@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Sign a built muxel.app and package it into a .dmg + .zip.
+# Sign a built muxal.app and package it into a .dmg + .zip.
 #
-#   sign-macos.sh <muxel.app> <output-basename>
-#       e.g. sign-macos.sh muxel.app muxel-macos-universal
+#   sign-macos.sh <muxal.app> <output-basename>
+#       e.g. sign-macos.sh muxal.app muxal-macos-universal
 #
 # Two modes, chosen by whether MACOS_CERTIFICATE is set:
 #
@@ -37,11 +37,11 @@ out="${2:?usage: sign-macos.sh <app> <output-basename>}"
 tmp="${RUNNER_TEMP:-/tmp}"
 # Entitlements applied under Hardened Runtime — currently just microphone access
 # (speech-to-text). Resolved relative to this script so cwd doesn't matter.
-entitlements="$(cd "$(dirname "$0")/.." && pwd)/packaging/macos/muxel.entitlements"
+entitlements="$(cd "$(dirname "$0")/.." && pwd)/packaging/macos/muxal.entitlements"
 
 if [ -n "${MACOS_CERTIFICATE:-}" ]; then
   echo "==> Signing with Developer ID: ${MACOS_SIGN_IDENTITY:-?}"
-  keychain="$tmp/muxel-signing.keychain-db"
+  keychain="$tmp/muxal-signing.keychain-db"
   kc_pw="$(openssl rand -base64 24)"
   security create-keychain -p "$kc_pw" "$keychain"
   security set-keychain-settings -lut 21600 "$keychain"
@@ -83,7 +83,7 @@ notarize() {
 
 # Notarize + staple the app (so the .zip artifact carries a valid ticket offline).
 if [ -n "$notarize_enabled" ]; then
-  echo "==> Notarizing muxel.app…"
+  echo "==> Notarizing muxal.app…"
   ditto -c -k --keepParent "$app" "$tmp/notarize.zip"
   notarize "$tmp/notarize.zip"
   xcrun stapler staple "$app"
@@ -92,15 +92,15 @@ fi
 # Final artifacts from the (signed, possibly stapled) app.
 #
 # DMG: stage the app next to an /Applications symlink so the mounted volume
-# shows the familiar "drag muxel onto Applications" layout. `ditto` (not `cp`)
+# shows the familiar "drag muxal onto Applications" layout. `ditto` (not `cp`)
 # copies the bundle so its code signature and stapled notarization ticket carry
 # over intact.
-dmg_stage="$tmp/muxel-dmg-stage"
+dmg_stage="$tmp/muxal-dmg-stage"
 rm -rf "$dmg_stage"
 mkdir -p "$dmg_stage"
 ditto "$app" "$dmg_stage/$(basename "$app")"
 ln -s /Applications "$dmg_stage/Applications"
-hdiutil create -volname muxel -srcfolder "$dmg_stage" -ov -format UDZO "$out.dmg"
+hdiutil create -volname muxal -srcfolder "$dmg_stage" -ov -format UDZO "$out.dmg"
 rm -rf "$dmg_stage"
 
 ditto -c -k --keepParent "$app" "$out.zip"

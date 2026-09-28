@@ -1,0 +1,2858 @@
+//! [`TerminalView`] — a gpui entity that owns a [`TerminalSession`], drains its
+//! output into the grid, renders it via [`TerminalElement`], and forwards
+//! keyboard input.
+
+use crate::colors::TerminalPalette;
+use crate::element::TerminalElement;
+use crate::keymap::{KeyModifiers, key_to_bytes};
+use crate::profile;
+use crate::session::{CommandSpec, ProfiledPtyChunk, TerminalSession};
+use alacritty_terminal::term::ClipboardType;
+use anyhow::Context as _;
+use gpui::*;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use uuid::Uuid;
+
+/// Stop draining after this many bytes in a single turn so one noisy terminal
+/// can't starve the UI; the rest stays buffered for the next turn.
+const MAX_BYTES_PER_TURN: usize = 256 * 1024;
+
+/// Unfocused terminals still parse PTY output (status badges need a warm grid)
+/// but only repaint at this rate. Multi-agent streams at 10 Hz still starved the
+/// UI thread under load; 4 Hz is enough for status dots and idle panes.
+const BACKGROUND_PAINT_INTERVAL: Duration = Duration::from_millis(250);
+
+/// Focused stream output outside the recent-input window: ~30 Hz.
+/// Typing-while-Claude-streams used to notify every batch (~full submit thrash).
+const FOCUSED_STREAM_INTERVAL: Duration = Duration::from_millis(33);
+
+/// Focused output shortly after user input: keep TUI feedback crisp.
+const FOCUSED_INTERACTION_INTERVAL: Duration = Duration::from_millis(8);
+
+/// Grok redraws its foreground background-work summary. Keep one exact positive
+/// observation through a brief missing frame so a repaint cannot forge a
+/// Working→Done→Working lifecycle and duplicate completion notifications.
+const GROK_SCREEN_WORKING_HOLD: Duration = Duration::from_secs(2);
+
+/// Pure paint-priority policy.
+/// Extracted so we can unit-test without a full GPUI window.
+pub(crate) fn paint_min_interval(focused: bool, interactive: bool, stop: bool) -> Duration {
+    if stop {
+        Duration::ZERO
+    } else if !focused {
+        BACKGROUND_PAINT_INTERVAL
+    } else if interactive {
+        FOCUSED_INTERACTION_INTERVAL
+    } else {
+        FOCUSED_STREAM_INTERVAL
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PaintSchedule {
+    Now,
+    At(Instant),
+    KeepPending,
+}
+
+fn next_paint_schedule(
+    last_notify: Instant,
+    pending: Option<Instant>,
+    now: Instant,
+    min_interval: Duration,
+) -> PaintSchedule {
+    let deadline = last_notify + min_interval;
+    if now >= deadline {
+        PaintSchedule::Now
+    } else if pending.is_some_and(|pending| pending <= deadline) {
+        PaintSchedule::KeepPending
+    } else {
+        PaintSchedule::At(deadline)
+    }
+}
+
+/// A small margin between the terminal grid and the pane edge. The grid (and so
+/// the reported size) is computed from the inset area, giving a TUI that renders
+/// wider than expected some breathing room from the border/scrollbar instead of
+/// jamming against it.
+const TERM_INSET: Pixels = px(6.0);
+
+/// Open a link the user ctrl+clicked in a terminal — an `http(s)://` URL or a
+/// `file://` URI for an existing local file. Dispatched by the terminal element
+/// and handled by the app, which routes URLs to the built-in browser (when
+/// enabled) or the OS.
+#[derive(Action, Clone, PartialEq)]
+#[action(namespace = terminal, no_json)]
+pub struct OpenLink(pub String);
+
+/// Open a terminal link without moving focus away from the terminal.
+#[derive(Action, Clone, PartialEq)]
+#[action(namespace = terminal, no_json)]
+pub struct OpenLinkBackground(pub String);
+
+/// Lifecycle state of a terminal/agent, shown as a badge. Inferred from the
+/// agent's TUI (per-agent markers), the bell, output activity, and process exit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentStatus {
+    /// Actively generating / running tools (a working marker, or recent output).
+    Working,
+    /// Alive but quiet — nothing pending.
+    Idle,
+    /// Waiting on the user — a permission/approval prompt is on screen.
+    Blocked,
+    /// Finished a turn (rang the bell) or the process exited.
+    Done,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TitleProvider {
+    Claude,
+    Codex,
+    Grok,
+    Other,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AgentTitleFrame {
+    status: Option<AgentStatus>,
+    name: Option<String>,
+}
+
+impl TitleProvider {
+    fn from_program(program: &str) -> Self {
+        let leaf = program
+            .trim()
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let stem = leaf
+            .strip_suffix(".exe")
+            .or_else(|| leaf.strip_suffix(".cmd"))
+            .or_else(|| leaf.strip_suffix(".bat"))
+            .unwrap_or(&leaf);
+        match stem {
+            "claude" => Self::Claude,
+            "codex" => Self::Codex,
+            "grok" => Self::Grok,
+            _ => Self::Other,
+        }
+    }
+}
+
+/// Parse one provider-owned title frame into independent lifecycle and naming
+/// observations. Unknown titles produce neither: every process sharing the PTY
+/// can emit OSC titles, and those events carry no process identity.
+fn parse_agent_title(provider: TitleProvider, title: Option<&str>) -> Option<AgentTitleFrame> {
+    let title = title?.trim();
+    match provider {
+        TitleProvider::Claude => {
+            let marker = title.chars().next()?;
+            let status = match marker {
+                // Claude owns this title protocol. Claude 2.1.228+ uses
+                // half-circle busy frames; older releases used braille frames.
+                // Long-running tools can leave one frame unchanged for minutes,
+                // so age is not completion evidence.
+                '◐' | '◑' | '◒' | '◓' => AgentStatus::Working,
+                marker if ('\u{2800}'..='\u{28ff}').contains(&marker) => AgentStatus::Working,
+                '✳' => AgentStatus::Idle,
+                _ => return None,
+            };
+            let rest = &title[marker.len_utf8()..];
+            if !rest.is_empty() && !rest.chars().next().is_some_and(char::is_whitespace) {
+                return None;
+            }
+            let name = rest.trim().to_string();
+            Some(AgentTitleFrame {
+                status: Some(status),
+                name: (!name.is_empty()).then_some(name),
+            })
+        }
+        TitleProvider::Codex => {
+            // Codex 0.147 publishes action-required before the thread field.
+            // Its normal contract is `thread | run-state [spinner]`; older
+            // releases used `thread | run-state · activity`.
+            for prefix in ["[ ! ] Action Required", "[ . ] Action Required"] {
+                if let Some(rest) = title.strip_prefix(prefix) {
+                    let name = if rest.is_empty() {
+                        None
+                    } else {
+                        let name = rest.strip_prefix(" | ")?.trim();
+                        (!name.is_empty()).then_some(name.to_string())
+                    };
+                    return Some(AgentTitleFrame {
+                        status: Some(AgentStatus::Blocked),
+                        name,
+                    });
+                }
+            }
+
+            // Parse state only from the final segment: thread names may contain
+            // words such as "working", "ready", or "action required".
+            let (name, state) = title.rsplit_once(" | ")?;
+            let name = name.trim();
+            if name.is_empty() {
+                return None;
+            }
+            Some(AgentTitleFrame {
+                status: Some(codex_title_state(state)?),
+                name: Some(name.to_string()),
+            })
+        }
+        TitleProvider::Grok => {
+            let parts = title.split(" - ").map(str::trim).collect::<Vec<_>>();
+            if parts.last() != Some(&"grok") {
+                return None;
+            }
+            let payload = &parts[..parts.len() - 1];
+            let (status, name_start) = match payload {
+                ["⚠ Action Required", spinner, _activity, ..] if is_grok_spinner(spinner) => {
+                    (Some(AgentStatus::Blocked), 3)
+                }
+                [spinner, _activity, ..] if is_grok_spinner(spinner) => {
+                    // The spinner is Grok's semantic busy bit. Activity prose is
+                    // intentionally open-ended and changes as tools are added.
+                    // Grok removes both fields when it returns to Idle.
+                    (Some(AgentStatus::Working), 2)
+                }
+                [reserved, ..] if *reserved == "⚠ Action Required" || is_grok_spinner(reserved) =>
+                {
+                    // A partial reserved prefix may come from a custom title
+                    // layout or a generated name. Keep the name, but make no
+                    // lifecycle claim without the complete provider frame.
+                    (None, 0)
+                }
+                // With no complete state/activity prefix, every segment before
+                // the provider sentinel belongs to the generated session name.
+                _ => (Some(AgentStatus::Idle), 0),
+            };
+            let name = payload[name_start..]
+                .iter()
+                .filter(|part| !part.is_empty())
+                .copied()
+                .collect::<Vec<_>>()
+                .join(" - ");
+            Some(AgentTitleFrame {
+                status,
+                name: (!name.is_empty()).then_some(name),
+            })
+        }
+        TitleProvider::Other => None,
+    }
+}
+
+fn is_codex_spinner(value: &str) -> bool {
+    matches!(
+        value,
+        "⠋" | "⠙" | "⠹" | "⠸" | "⠼" | "⠴" | "⠦" | "⠧" | "⠇" | "⠏"
+    )
+}
+
+fn codex_title_state(state: &str) -> Option<AgentStatus> {
+    let state = state.trim();
+    if let Some((run_state, activity)) = state.split_once('·') {
+        if activity.contains('·') {
+            return None;
+        }
+        let run_state = run_state.trim().to_ascii_lowercase();
+        let activity = activity.trim().to_ascii_lowercase();
+        return match (run_state.as_str(), activity.as_str()) {
+            ("ready", "action required") => Some(AgentStatus::Blocked),
+            ("ready", "") => Some(AgentStatus::Idle),
+            ("starting" | "working" | "thinking" | "waiting", activity) if !activity.is_empty() => {
+                Some(AgentStatus::Working)
+            }
+            _ => None,
+        };
+    }
+
+    let mut parts = state.split_whitespace();
+    let run_state = parts.next()?.to_ascii_lowercase();
+    let activity = parts.next();
+    if parts.next().is_some() {
+        return None;
+    }
+    match (run_state.as_str(), activity) {
+        ("ready", None) => Some(AgentStatus::Idle),
+        ("starting" | "working" | "thinking" | "waiting", None) => Some(AgentStatus::Working),
+        ("starting" | "working" | "thinking" | "waiting", Some(spinner))
+            if is_codex_spinner(spinner) =>
+        {
+            Some(AgentStatus::Working)
+        }
+        _ => None,
+    }
+}
+
+fn title_status(
+    provider: TitleProvider,
+    title: Option<&str>,
+    _age: Option<Duration>,
+) -> Option<AgentStatus> {
+    parse_agent_title(provider, title).and_then(|frame| frame.status)
+}
+
+/// Once a provider proves its semantic title protocol, an unrelated OSC title
+/// must not erase that observation or reactivate the weak PTY activity heuristic.
+fn sticky_title_status(
+    previous: Option<AgentStatus>,
+    observed: Option<AgentStatus>,
+) -> Option<AgentStatus> {
+    observed.or(previous)
+}
+
+/// Provider-owned visible UI that adds state not carried by the terminal title.
+fn provider_screen_status(provider: TitleProvider, screen: &str) -> Option<AgentStatus> {
+    match provider {
+        TitleProvider::Claude if is_claude_blocked_prompt(screen) => Some(AgentStatus::Blocked),
+        TitleProvider::Claude if claude_screen_has_current_work(screen) => {
+            Some(AgentStatus::Working)
+        }
+        TitleProvider::Grok
+            if screen.lines().any(|line| {
+                is_live_background_row(
+                    line,
+                    &["◎", "·"],
+                    &["command", "monitor", "loop", "subagent"],
+                    false,
+                )
+            }) =>
+        {
+            Some(AgentStatus::Working)
+        }
+        _ => None,
+    }
+}
+
+fn claude_screen_has_current_work(screen: &str) -> bool {
+    let mut newer_rows = [None, None];
+    for line in screen.lines().rev() {
+        if is_claude_live_task_footer(line, newer_rows)
+            || is_claude_live_foreground_row(line)
+            || is_claude_live_background_row(line)
+        {
+            return true;
+        }
+        if is_claude_completed_foreground_row(line) {
+            return false;
+        }
+        newer_rows[1] = newer_rows[0];
+        newer_rows[0] = Some(line);
+    }
+    false
+}
+
+fn is_claude_live_task_footer(line: &str, newer_rows: [Option<&str>; 2]) -> bool {
+    if is_claude_live_task_footer_line(line) {
+        return true;
+    }
+    if !line.trim().starts_with("Auto mode") {
+        return false;
+    }
+
+    let mut footer = line.trim().to_string();
+    let mut previous = line;
+    for row in newer_rows.into_iter().flatten() {
+        if row.trim().is_empty() {
+            return false;
+        }
+        if previous.ends_with(char::is_whitespace) || row.starts_with(char::is_whitespace) {
+            footer.push(' ');
+        }
+        footer.push_str(row.trim());
+        if is_claude_live_task_footer_line(&footer) {
+            return true;
+        }
+        previous = row;
+    }
+    false
+}
+
+fn is_claude_live_task_footer_line(line: &str) -> bool {
+    let Some(summary) = line.trim().strip_prefix("Auto mode on · ") else {
+        return false;
+    };
+    let mut tasks = summary
+        .split(" · ")
+        .flat_map(|group| group.split(", "))
+        .peekable();
+    tasks.peek().is_some() && tasks.all(is_claude_live_task_count)
+}
+
+fn is_claude_live_task_count(task: &str) -> bool {
+    let Some((count, kind)) = task.split_once(' ') else {
+        return false;
+    };
+    let Ok(count) = count.parse::<usize>() else {
+        return false;
+    };
+    if count == 0 {
+        return false;
+    }
+    let base = if count == 1 {
+        kind
+    } else {
+        let Some(base) = kind.strip_suffix('s') else {
+            return false;
+        };
+        base
+    };
+    matches!(
+        base,
+        "shell"
+            | "monitor"
+            | "agent"
+            | "team"
+            | "local agent"
+            | "cloud session"
+            | "background task"
+            | "background dynamic workflow"
+            | "MCP task"
+            | "remote dynamic workflow"
+    )
+}
+
+fn is_claude_live_foreground_row(line: &str) -> bool {
+    let Some(status) = line.trim().strip_prefix("✻ ") else {
+        return false;
+    };
+    let Some((activity, metrics)) = status.rsplit_once(" (") else {
+        return false;
+    };
+    if activity
+        .trim_end()
+        .strip_suffix('…')
+        .is_none_or(|label| label.trim().is_empty())
+    {
+        return false;
+    }
+    let Some(metrics) = metrics.strip_suffix(')') else {
+        return false;
+    };
+    let Some((elapsed, tokens)) = metrics.split_once(" · ") else {
+        return false;
+    };
+    is_claude_elapsed(elapsed.trim())
+        && tokens
+            .trim()
+            .strip_suffix(" tokens")
+            .is_some_and(|count| is_claude_token_count(count.trim()))
+}
+
+fn is_claude_completed_foreground_row(line: &str) -> bool {
+    let Some(status) = line.trim().strip_prefix("✻ ") else {
+        return false;
+    };
+    let Some((summary, finished_at)) = status.rsplit_once(" · done ") else {
+        return false;
+    };
+    let Some((activity, elapsed)) = summary.rsplit_once(" for ") else {
+        return false;
+    };
+    !activity.trim().is_empty()
+        && is_claude_elapsed(elapsed.trim())
+        && is_claude_clock_time(finished_at.trim())
+}
+
+fn is_claude_clock_time(value: &str) -> bool {
+    let Some((clock, meridiem)) = value.rsplit_once(' ') else {
+        return false;
+    };
+    if !matches!(meridiem, "AM" | "PM") {
+        return false;
+    }
+    let Some((hour, minute)) = clock.split_once(':') else {
+        return false;
+    };
+    let Ok(hour) = hour.parse::<u8>() else {
+        return false;
+    };
+    hour != 0
+        && hour <= 12
+        && minute.len() == 2
+        && minute.bytes().all(|byte| byte.is_ascii_digit())
+        && minute.parse::<u8>().is_ok_and(|minute| minute < 60)
+}
+
+fn is_claude_token_count(value: &str) -> bool {
+    let Some(value) = value
+        .strip_prefix("↑ ")
+        .or_else(|| value.strip_prefix("↓ "))
+    else {
+        return false;
+    };
+    let (number, scaled) = value
+        .strip_suffix('k')
+        .or_else(|| value.strip_suffix('m'))
+        .map_or((value, false), |number| (number, true));
+    let mut parts = number.split('.');
+    let Some(whole) = parts.next() else {
+        return false;
+    };
+    let fraction = parts.next();
+    !whole.is_empty()
+        && whole.bytes().all(|byte| byte.is_ascii_digit())
+        && fraction.is_none_or(|fraction| {
+            scaled && !fraction.is_empty() && fraction.bytes().all(|byte| byte.is_ascii_digit())
+        })
+        && parts.next().is_none()
+}
+
+fn is_claude_elapsed(value: &str) -> bool {
+    let mut previous_rank = 4;
+    for part in value.split_whitespace() {
+        let Some((unit, digits)) = part
+            .char_indices()
+            .next_back()
+            .map(|(index, unit)| (unit, &part[..index]))
+        else {
+            return false;
+        };
+        let rank = match unit {
+            'h' => 3,
+            'm' => 2,
+            's' => 1,
+            _ => return false,
+        };
+        if rank >= previous_rank
+            || digits.is_empty()
+            || !digits.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return false;
+        }
+        previous_rank = rank;
+    }
+    previous_rank != 4
+}
+
+fn is_claude_live_background_row(line: &str) -> bool {
+    if is_live_background_row(line, &["·"], &["command"], true) {
+        return true;
+    }
+
+    let line = line.trim();
+    let Some((activity, summary)) = line.rsplit_once(" · ") else {
+        return false;
+    };
+    if !activity.trim().starts_with("✻ ") {
+        return false;
+    }
+    is_live_background_row(&format!("· {summary}"), &["·"], &["shell"], false)
+}
+
+fn is_claude_blocked_prompt(screen: &str) -> bool {
+    // Prompt chrome is transient and lives near the bottom of the viewport.
+    // Restricting the scan avoids matching an old prompt quoted in scrollback.
+    let recent = screen
+        .lines()
+        .rev()
+        .filter(|line| !line.trim().is_empty())
+        .take(16)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_ascii_lowercase();
+    let has_cancel = recent.contains("esc to cancel");
+    if !has_cancel {
+        return false;
+    }
+
+    if recent.contains("run a dynamic workflow?") {
+        return true;
+    }
+
+    let has_choice = recent.lines().any(|line| {
+        let choice = line.trim().trim_start_matches(['┃', '❯']).trim();
+        choice == "yes"
+            || choice.starts_with("1. yes")
+            || choice.starts_with("2. yes")
+            || choice.starts_with("2. no")
+            || choice.starts_with("3. no")
+    });
+    if recent.contains("do you want to proceed?") && has_choice {
+        return true;
+    }
+
+    let has_navigation = [
+        "tab/arrow keys to navigate",
+        "arrow keys to navigate",
+        "arrows to navigate",
+        "↑/↓ to navigate",
+        "↑↓ to navigate",
+    ]
+    .into_iter()
+    .any(|hint| recent.contains(hint));
+    recent.contains("enter to confirm") || (recent.contains("enter to select") && has_navigation)
+}
+
+fn is_live_background_row(
+    line: &str,
+    provider_markers: &[&str],
+    allowed_kinds: &[&str],
+    require_interrupt_hint: bool,
+) -> bool {
+    let words: Vec<_> = line.split_whitespace().collect();
+    if words
+        .first()
+        .is_none_or(|word| !provider_markers.contains(word))
+    {
+        return false;
+    }
+
+    const INTERRUPT_HINT: [&str; 6] = ["·", "send", "a", "message", "to", "interrupt"];
+    let summary_end = if words.ends_with(&INTERRUPT_HINT) {
+        words.len() - INTERRUPT_HINT.len()
+    } else if require_interrupt_hint {
+        return false;
+    } else {
+        words.len()
+    };
+    if summary_end < 4 || words[summary_end - 2..summary_end] != ["still", "running"] {
+        return false;
+    }
+
+    let summary = &words[1..summary_end - 2];
+    let mut index = 0;
+    while index < summary.len() {
+        let Some(kind) = summary.get(index + 1) else {
+            return false;
+        };
+        let Ok(count) = summary[index].parse::<usize>() else {
+            return false;
+        };
+        if count == 0
+            || !allowed_kinds.iter().any(|base| {
+                (count == 1 && kind == base) || (count > 1 && kind.strip_suffix('s') == Some(*base))
+            })
+        {
+            return false;
+        }
+        index += 2;
+        if index == summary.len() {
+            return true;
+        }
+        if summary[index] != "·" {
+            return false;
+        }
+        index += 1;
+    }
+    false
+}
+
+fn is_grok_spinner(part: &str) -> bool {
+    matches!(part, "⠋" | "⠙" | "⠹" | "⠸" | "⠼" | "⠴" | "⠦" | "⠧")
+}
+
+fn combine_title_status(
+    exited: bool,
+    base: AgentStatus,
+    title: Option<AgentStatus>,
+    screen_working: bool,
+) -> AgentStatus {
+    if exited {
+        return AgentStatus::Done;
+    }
+    if base == AgentStatus::Blocked || title == Some(AgentStatus::Blocked) {
+        return AgentStatus::Blocked;
+    }
+    // Provider-owned visible UI is independent strong evidence. Claude can
+    // leave its semantic title in the Idle shape while a background command or
+    // permission form remains visible.
+    if screen_working {
+        return AgentStatus::Working;
+    }
+    match title {
+        Some(AgentStatus::Working) => AgentStatus::Working,
+        // A bell is a stronger completion edge than an idle title.
+        Some(AgentStatus::Idle) if base != AgentStatus::Done => AgentStatus::Idle,
+        _ => base,
+    }
+}
+
+/// Grok blinks its action-required title item off for roughly half of each
+/// second while unfocused. Hold Blocked through that documented off-frame; a
+/// stable Idle title clears it immediately, while approval may leave at most a
+/// short tail before Working becomes visible.
+fn hold_grok_blocked(
+    status: Option<AgentStatus>,
+    blocked_age: Option<Duration>,
+) -> Option<AgentStatus> {
+    match status {
+        Some(AgentStatus::Working)
+            if blocked_age.is_some_and(|age| age <= Duration::from_millis(750)) =>
+        {
+            Some(AgentStatus::Blocked)
+        }
+        other => other,
+    }
+}
+
+/// Grok's exact foreground background-work row can disappear for a repaint.
+/// Debounce only a previously observed positive row; stable absence expires.
+fn hold_grok_screen_working(observed: bool, last_seen_age: Option<Duration>) -> bool {
+    observed || last_seen_age.is_some_and(|age| age <= GROK_SCREEN_WORKING_HOLD)
+}
+
+/// Remove provider lifecycle decoration before a title is considered for the
+/// pane's persisted automatic name. A title containing only state is not a name.
+pub fn clean_agent_title(program: &str, title: &str) -> Option<String> {
+    match TitleProvider::from_program(program) {
+        TitleProvider::Other => Some(title.to_string()),
+        provider => parse_agent_title(provider, Some(title))?.name,
+    }
+}
+
+/// Decide an agent's lifecycle state from its signals. Pure (unit-testable):
+/// exit wins; then on-screen markers (working spinner, blocked prompt); then a
+/// rung bell means a finished turn; then recent output is an opt-in fallback
+/// for unknown terminals only.
+fn classify(
+    exited: bool,
+    screen: &str,
+    working: &[String],
+    blocked: &[String],
+    bell: bool,
+    activity_fallback: bool,
+    idle: Duration,
+) -> AgentStatus {
+    if exited {
+        return AgentStatus::Done;
+    }
+    if blocked.iter().any(|m| screen.contains(m)) {
+        return AgentStatus::Blocked;
+    }
+    // User-actionable input wins when a provider leaves its working marker on
+    // screen behind an approval prompt.
+    if working.iter().any(|m| screen.contains(m)) {
+        return AgentStatus::Working;
+    }
+    if bell {
+        return AgentStatus::Done;
+    }
+    // Raw PTY churn is useful only for unknown terminals. Known providers own
+    // semantic signals; using echoed typing here would forge Working.
+    if activity_fallback && working.is_empty() && idle < Duration::from_secs(2) {
+        return AgentStatus::Working;
+    }
+    AgentStatus::Idle
+}
+
+/// Promote a working→idle transition to `Done`, latching it until the agent works
+/// again. Returns `(displayed status, new latch state)`.
+/// Pure half of [`TerminalView::status`]'s done-latch, so a finished turn shows
+/// Done even when the agent never rang the bell.
+///
+/// `can_latch` gates the mechanism to agents whose `Working` state has reliable
+/// marker or semantic-title evidence. Other terminals infer Working from recent
+/// output alone, where incidental repaint output would create a bogus Done.
+fn latch_done(
+    prev_raw: Option<AgentStatus>,
+    raw: AgentStatus,
+    latched: bool,
+    can_latch: bool,
+) -> (AgentStatus, bool) {
+    match raw {
+        // New activity or an input request replaces the previous completion.
+        AgentStatus::Working | AgentStatus::Blocked => (raw, false),
+        // Bell/exit is precise completion evidence. Latch it so acknowledging the
+        // notification cannot turn lifecycle back into Idle.
+        AgentStatus::Done => (AgentStatus::Done, true),
+        AgentStatus::Idle => {
+            if can_latch && (latched || prev_raw == Some(AgentStatus::Working)) {
+                (AgentStatus::Done, true)
+            } else {
+                (AgentStatus::Idle, false)
+            }
+        }
+    }
+}
+
+fn latch_done_after_readiness(
+    prev_raw: Option<AgentStatus>,
+    raw: AgentStatus,
+    latched: bool,
+    can_latch: bool,
+    armed: bool,
+    submitted: bool,
+) -> (AgentStatus, bool, bool) {
+    let armed_before_edge = armed || submitted;
+    let (status, latched) = latch_done(prev_raw, raw, latched, can_latch && armed_before_edge);
+    (
+        status,
+        latched,
+        armed_before_edge || raw == AgentStatus::Idle,
+    )
+}
+
+fn can_latch_completion(has_working_markers: bool, semantic_title_seen: bool) -> bool {
+    has_working_markers || semantic_title_seen
+}
+
+fn provider_settled_after_title(
+    settled: bool,
+    observed_title: Option<AgentStatus>,
+    submitted: bool,
+) -> bool {
+    settled || submitted || observed_title == Some(AgentStatus::Idle)
+}
+
+/// How the mouse copies/pastes in a terminal pane (a global setting parsed from
+/// `Settings.terminal_mouse`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TerminalMouseMode {
+    /// Right-click copies the selection, or pastes when nothing is selected.
+    #[default]
+    CopyPaste,
+    /// Right-click opens a Copy/Paste menu; selection stays manual.
+    RightClickMenu,
+    /// Selecting text copies it immediately; right-click pastes.
+    CopyOnSelect,
+}
+
+impl TerminalMouseMode {
+    /// Parse the persisted setting string; unknown values fall back to the default.
+    pub fn from_setting(s: &str) -> Self {
+        match s {
+            "menu" => Self::RightClickMenu,
+            "copy_on_select" => Self::CopyOnSelect,
+            _ => Self::CopyPaste,
+        }
+    }
+}
+
+/// How a child ended, carried from `ProfiledPtyChunk::Exit` to the view in one piece so
+/// the three same-typed optionals can't be transposed at a call site.
+struct ExitInfo {
+    code: Option<i32>,
+    signal: Option<String>,
+    read_error: Option<String>,
+}
+
+/// Drain whatever is already buffered on the channel into `output`, stopping
+/// at an Exit event or once [`MAX_BYTES_PER_TURN`] is buffered (the rest stays
+/// queued for the next drain turn).
+fn coalesce_pending(
+    rx: &async_channel::Receiver<ProfiledPtyChunk>,
+    instance_id: Uuid,
+    output: &mut Vec<u8>,
+    exit: &mut Option<ExitInfo>,
+) {
+    while let Ok(more) = rx.try_recv() {
+        match more {
+            ProfiledPtyChunk::Output { bytes, timing } => {
+                if let Some(timing) = timing {
+                    profile::output_drained(instance_id, timing);
+                }
+                output.extend_from_slice(&bytes);
+            }
+            ProfiledPtyChunk::Exit {
+                code,
+                signal,
+                read_error,
+            } => {
+                *exit = Some(ExitInfo {
+                    code,
+                    signal,
+                    read_error,
+                });
+                return;
+            }
+        }
+        if output.len() >= MAX_BYTES_PER_TURN {
+            return;
+        }
+    }
+}
+
+pub struct TerminalView {
+    instance_id: Uuid,
+    session: Arc<TerminalSession>,
+    focus_handle: FocusHandle,
+    palette: TerminalPalette,
+    font_family: SharedString,
+    font_size: f32,
+    mouse_mode: TerminalMouseMode,
+    exited: bool,
+    /// The child's exit code once it has exited (`None` = still running or the
+    /// code wasn't reported by the OS/PTY). `Some(1)` may mean a signal — see
+    /// `exit_signal`.
+    exit_code: Option<i32>,
+    /// The signal that killed the child, when one did (see `ProfiledPtyChunk::Exit`).
+    exit_signal: Option<String>,
+    /// Set when the session ended on a PTY read error rather than a clean EOF —
+    /// the child may still have been healthy (see `ProfiledPtyChunk::Exit`).
+    exit_read_error: Option<String>,
+    /// Error from a failed launch (e.g. the agent program isn't on PATH), captured
+    /// for the dev console. `None` when the program launched fine.
+    launch_error: Option<String>,
+    /// Latched when the child first draws non-whitespace content. Kept here so
+    /// an animated loading overlay does not rescan the terminal grid every frame.
+    has_visible_content: bool,
+    /// On-screen markers that classify the agent's status (per-agent).
+    working_markers: Vec<String>,
+    blocked_markers: Vec<String>,
+    title_provider: TitleProvider,
+    /// Latches `Done` from a working→finished transition so a completed turn shows
+    /// Done (and notifies) even when the agent didn't ring the bell. `prev_raw` is
+    /// the previous *raw* classification; the latch clears when the agent works
+    /// again.
+    prev_raw: std::cell::Cell<Option<AgentStatus>>,
+    done_latch: std::cell::Cell<bool>,
+    /// Ready/Idle must be observed once, or a turn submitted, before a
+    /// Working→Idle edge can mean Done. This rejects startup spinners.
+    completion_armed: std::cell::Cell<bool>,
+    /// A provider-owned Ready/Idle title, unlike fallback PTY quiet, proves the
+    /// restored CLI has finished booting. This bounds startup-state suppression.
+    provider_settled: std::cell::Cell<bool>,
+    /// Last provider-owned title state. Foreign OSC titles cannot erase it or
+    /// reactivate the weak PTY activity fallback.
+    semantic_title_status: std::cell::Cell<Option<AgentStatus>>,
+    /// Grok's action-required title item intentionally blinks when unfocused.
+    /// Retain the last positive edge briefly so the sidebar does not blink too.
+    grok_blocked_at: std::cell::Cell<Option<std::time::Instant>>,
+    /// Grok redraws its exact foreground background-work row. Retain a positive
+    /// observation briefly so an off-frame cannot forge completion.
+    grok_screen_working_at: std::cell::Cell<Option<std::time::Instant>>,
+    /// Last time we `cx.notify()`'d a paint from the drain loop (background throttle).
+    last_paint_notify: std::cell::Cell<std::time::Instant>,
+    /// Profiler correlation only: advances once per output-driven `cx.notify()`.
+    /// State is fixed-size per pane and no terminal content is retained.
+    profile_notify_generation: std::cell::Cell<u64>,
+    profile_last_notify_cause: std::cell::Cell<Option<TerminalNotifyCause>>,
+    profile_focus: bool,
+    /// A throttled batch must still paint if output stops before the next batch.
+    /// The generation invalidates an older, later timer when interactive output
+    /// brings the deadline forward.
+    pending_paint_deadline: std::cell::Cell<Option<std::time::Instant>>,
+    paint_timer_generation: std::cell::Cell<u64>,
+    /// Cached agent status for the current grid and OSC-title generations.
+    status_cache: std::cell::Cell<Option<(u64, u64, AgentStatus)>>,
+    _drain: Task<()>,
+}
+
+/// Optional app-owned diagnostic invoked at the existing GPUI terminal focus
+/// edge. Muxal injects it only while the opt-in profiler is enabled, keeping
+/// platform/window knowledge out of this crate without creating a dependency
+/// cycle.
+pub type TerminalFocusObserver = fn(Uuid, bool, &mut Window, &mut App);
+
+/// Why the drain loop most recently notified GPUI to request a redraw.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TerminalNotifyCause {
+    Immediate,
+    Timer,
+}
+
+/// Content-free state sampled only when the app-level UI profiler observes a
+/// focus-path failure. These counters describe notification scheduling, not
+/// completion of a paint or native presentation.
+#[derive(Clone, Copy, Debug)]
+pub struct TerminalFocusProfile {
+    pub content_generation: u64,
+    pub notify_generation: u64,
+    pub last_notify_age: Option<Duration>,
+    pub last_notify_cause: Option<TerminalNotifyCause>,
+    pub notify_pending: bool,
+}
+
+impl Drop for TerminalView {
+    fn drop(&mut self) {
+        profile::pane_closed(self.instance_id);
+    }
+}
+
+/// A spawned terminal not yet wrapped in a view: the spec that actually ran
+/// (the requested one, or the fallback shell), the live session + its output
+/// receiver, and the launch error when the requested program failed to start.
+/// Splitting the fallible spawn from the (infallible) gpui entity construction
+/// is what lets a total launch failure surface as an error instead of a panic.
+pub struct TerminalLaunch {
+    spec: CommandSpec,
+    session: Arc<TerminalSession>,
+    rx: async_channel::Receiver<ProfiledPtyChunk>,
+    launch_error: Option<String>,
+}
+
+impl TerminalLaunch {
+    /// Spawn `spec` at `size` (`(cols, rows)`); if it can't be launched (e.g. the
+    /// agent isn't installed), fall back to a shell that prints the error. `Err` only
+    /// when even the fallback shell can't spawn (bogus `$SHELL` and no `/bin/bash`,
+    /// fd exhaustion, …).
+    ///
+    /// `size` should be the grid the pane will actually render at — see
+    /// [`TerminalSession::size`]. Getting it right up front is what keeps a
+    /// `tmux attach` from painting its first frame at the wrong size.
+    pub fn spawn(spec: CommandSpec, size: (u16, u16)) -> anyhow::Result<Self> {
+        Self::spawn_with_fallback(spec, CommandSpec::shell(), size, None)
+    }
+
+    /// Spawn while attributing PTY sub-phase timings to one pane.
+    pub fn spawn_for_instance(
+        spec: CommandSpec,
+        size: (u16, u16),
+        instance_id: Uuid,
+    ) -> anyhow::Result<Self> {
+        Self::spawn_with_fallback(spec, CommandSpec::shell(), size, Some(instance_id))
+    }
+
+    /// Testable inner half of [`Self::spawn`]: the fallback spec is injectable.
+    fn spawn_with_fallback(
+        spec: CommandSpec,
+        fallback: CommandSpec,
+        (cols, rows): (u16, u16),
+        instance_id: Option<Uuid>,
+    ) -> anyhow::Result<Self> {
+        let spawn = |spec| TerminalSession::spawn_internal(spec, cols, rows, instance_id);
+        match spawn(spec.clone()) {
+            Ok((session, rx)) => Ok(Self {
+                spec,
+                session,
+                rx,
+                launch_error: None,
+            }),
+            Err(e) => {
+                // Capture the full error (incl. the OS code) for the dev console.
+                let launch_error = format!("{e:#}");
+                let prog = spec.program.replace(['\'', '"'], "");
+                // `{e:#}` includes the full anyhow context chain (e.g. the real
+                // OS error: "No such file or directory"), not just the top context.
+                let detail = launch_error.replace(['\'', '"', '\n', '\r'], " ");
+                let shell = fallback.with_startup_input(format!(
+                    "printf '%s\\n' 'muxal: could not launch {prog}: {detail}'"
+                ));
+                let (session, rx) = spawn(shell.clone())
+                    .with_context(|| format!("fallback shell (after `{prog}` failed: {detail})"))?;
+                Ok(Self {
+                    spec: shell,
+                    session,
+                    rx,
+                    launch_error: Some(launch_error),
+                })
+            }
+        }
+    }
+
+    /// The error from a failed launch of the requested program (the fallback
+    /// shell is running instead). `None` when the program launched fine.
+    pub fn launch_error(&self) -> Option<&str> {
+        self.launch_error.as_deref()
+    }
+}
+
+impl TerminalView {
+    /// Notify now or arm one trailing-edge notify. A leading-edge throttle alone
+    /// can leave the final output batch stale forever when output stops inside
+    /// the interval.
+    ///
+    /// Every path that calls `cx.notify()` here must also arm the Windows
+    /// present pump ([`crate::present_flag`]): gpui-on-Windows can draw without
+    /// presenting, so a frame we schedule but never mark stays off-screen.
+    fn schedule_paint(&mut self, min_interval: Duration, cx: &mut Context<Self>) {
+        let now = Instant::now();
+        let deadline = match next_paint_schedule(
+            self.last_paint_notify.get(),
+            self.pending_paint_deadline.get(),
+            now,
+            min_interval,
+        ) {
+            PaintSchedule::Now => {
+                self.pending_paint_deadline.set(None);
+                self.paint_timer_generation
+                    .set(self.paint_timer_generation.get().wrapping_add(1));
+                self.last_paint_notify.set(now);
+                if self.profile_focus {
+                    self.profile_notify_generation
+                        .set(self.profile_notify_generation.get().wrapping_add(1));
+                    self.profile_last_notify_cause
+                        .set(Some(TerminalNotifyCause::Immediate));
+                }
+                cx.notify();
+                profile::notify_scheduled(
+                    self.instance_id,
+                    profile::PaintRequest::Now,
+                    min_interval,
+                );
+                crate::present_flag::mark_present_needed();
+                return;
+            }
+            PaintSchedule::KeepPending => return,
+            PaintSchedule::At(deadline) => deadline,
+        };
+
+        self.pending_paint_deadline.set(Some(deadline));
+        let generation = self.paint_timer_generation.get().wrapping_add(1);
+        self.paint_timer_generation.set(generation);
+        let delay = deadline.saturating_duration_since(now);
+        cx.spawn(async move |view: WeakEntity<Self>, cx| {
+            cx.background_executor().timer(delay).await;
+            let _ = view.update(cx, |view, cx| {
+                if view.paint_timer_generation.get() != generation {
+                    return;
+                }
+                view.pending_paint_deadline.set(None);
+                view.last_paint_notify.set(Instant::now());
+                if view.profile_focus {
+                    view.profile_notify_generation
+                        .set(view.profile_notify_generation.get().wrapping_add(1));
+                    view.profile_last_notify_cause
+                        .set(Some(TerminalNotifyCause::Timer));
+                }
+                cx.notify();
+                profile::notify_scheduled(
+                    view.instance_id,
+                    profile::PaintRequest::Timer,
+                    min_interval,
+                );
+                crate::present_flag::mark_present_needed();
+            });
+        })
+        .detach();
+    }
+
+    /// Wrap a spawned terminal in a view and wire up its output drain.
+    pub fn new(
+        launch: TerminalLaunch,
+        instance_id: Uuid,
+        startup_started: Instant,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::new_with_focus_observer(launch, instance_id, startup_started, None, window, cx)
+    }
+
+    /// [`Self::new`] with an optional app-owned diagnostic at the exact GPUI
+    /// focus edge. Kept separate so the normal public constructor remains
+    /// source-compatible for other workspace consumers.
+    pub fn new_with_focus_observer(
+        launch: TerminalLaunch,
+        instance_id: Uuid,
+        startup_started: Instant,
+        focus_observer: Option<TerminalFocusObserver>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let TerminalLaunch {
+            spec,
+            session,
+            rx,
+            launch_error,
+        } = launch;
+        let startup_input = spec.startup_input.clone();
+        let auto_mode_presses = spec.auto_mode_presses;
+        let startup_delay_ms = spec.startup_delay_ms;
+        let submit = spec.submit;
+        let working_markers = spec.working_markers.clone();
+        let blocked_markers = spec.blocked_markers.clone();
+        let startup_program = spec.program.clone();
+        let title_provider =
+            TitleProvider::from_program(spec.status_program.as_deref().unwrap_or(&startup_program));
+        let focus_handle = cx.focus_handle();
+
+        // Forward focus in/out to the PTY (DECSET 1004) so agents like Claude
+        // know when their pane is the one the user is looking at — and only
+        // notify when it isn't.
+        //
+        // These MUST be the `Context` (entity-scoped) subscriptions, never
+        // `window.on_focus_in(…).detach()`. A window-scoped focus listener lives
+        // as long as the *window*, and a closure capturing `session.clone()`
+        // therefore pins the `TerminalSession` — and its PTY master fd, its
+        // writer-thread fd dup, and that parked thread — for the rest of the
+        // process. Remote panes respawn on every dropped SSH connection, so that
+        // leaked ~2 fds per reconnect until the whole app hit EMFILE ("Too many
+        // open files") and could no longer spawn anything. The entity-scoped
+        // form holds only a `WeakEntity` and prunes itself once the view is gone.
+        cx.on_focus_in(&focus_handle, window, move |view, window, cx| {
+            profile::focus_changed(instance_id, true);
+            if let Some(observer) = focus_observer {
+                observer(instance_id, true, window, cx);
+            }
+            view.session.report_focus(true);
+        })
+        .detach();
+        cx.on_focus_out(&focus_handle, window, move |view, _ev, window, cx| {
+            profile::focus_changed(instance_id, false);
+            if let Some(observer) = focus_observer {
+                observer(instance_id, false, window, cx);
+            }
+            view.session.report_focus(false);
+        })
+        .detach();
+
+        // Startup automation (runners + type-in injection): once the agent is
+        // ready, optionally send Shift+Tab a few times to reach auto-accept mode,
+        // press Enter to confirm it, then type the prompt and press Enter.
+        //
+        // "Ready" = the child has produced output AND has then been quiet for
+        // SETTLE_MS. This adapts to slow starters (e.g. opencode, whose first
+        // output — clearing the screen — comes early but whose input box only
+        // appears seconds later, once it stops emitting): we wait for the load
+        // output to actually stop, not a guessed delay. SETTLE_MS is generous so
+        // a brief pause mid-load isn't mistaken for ready. Capped by MAX_WAIT in
+        // case a UI never goes quiet.
+        if let Some(input) = startup_input.as_ref() {
+            profile::startup_event(
+                instance_id,
+                &startup_program,
+                "automation-armed",
+                startup_started.elapsed(),
+                input.len(),
+            );
+        }
+        if auto_mode_presses > 0 || startup_input.is_some() {
+            const POLL_MS: u64 = 100;
+            const SETTLE_MS: u128 = 2000;
+            const MAX_WAIT_MS: u64 = 30_000;
+            const KEY_GAP_MS: u64 = 150;
+            const PRE_TYPE_MS: u64 = 300;
+            // The prompt is typed in one burst; wait before the submit Enter so
+            // the agent has finished ingesting the text and treats it as a
+            // deliberate submit rather than a newline within a paste.
+            const SUBMIT_DELAY_MS: u64 = 400;
+            const SHIFT_TAB: &[u8] = b"\x1b[Z";
+            let session = session.clone();
+            let automation_program = startup_program.clone();
+            cx.spawn(async move |_view: WeakEntity<Self>, cx| {
+                let timer = |ms| cx.background_executor().timer(Duration::from_millis(ms));
+                // Wait for the agent's first output (it has started up).
+                let mut waited = 0u64;
+                while !session.has_output() && waited < MAX_WAIT_MS {
+                    timer(POLL_MS).await;
+                    waited += POLL_MS;
+                }
+                profile::startup_event(
+                    instance_id,
+                    &automation_program,
+                    "automation-first-output",
+                    startup_started.elapsed(),
+                    0,
+                );
+                if startup_delay_ms > 0 {
+                    // Preset-configured fixed delay after first output — for agents
+                    // that keep loading well past their first draw (e.g. opencode).
+                    timer(startup_delay_ms as u64).await;
+                } else {
+                    // Auto: wait until output goes quiet (UI finished drawing).
+                    while waited < MAX_WAIT_MS && session.idle_for().as_millis() < SETTLE_MS {
+                        timer(POLL_MS).await;
+                        waited += POLL_MS;
+                    }
+                }
+                profile::startup_event(
+                    instance_id,
+                    &automation_program,
+                    "automation-settled",
+                    startup_started.elapsed(),
+                    0,
+                );
+                for _ in 0..auto_mode_presses {
+                    session.write_input(SHIFT_TAB);
+                    timer(KEY_GAP_MS).await;
+                }
+                // Confirm the mode switch with a single Enter.
+                if auto_mode_presses > 0 {
+                    session.write_input(b"\r");
+                    timer(KEY_GAP_MS).await;
+                }
+                if let Some(input) = startup_input {
+                    timer(PRE_TYPE_MS).await;
+                    session.paste(&input);
+                    profile::startup_event(
+                        instance_id,
+                        &automation_program,
+                        "automation-pasted",
+                        startup_started.elapsed(),
+                        input.len(),
+                    );
+                    // On restore, leave the prompt typed but unsubmitted.
+                    if submit {
+                        timer(SUBMIT_DELAY_MS).await;
+                        session.mark_turn_submitted();
+                        session.write_input(b"\r");
+                        profile::startup_event(
+                            instance_id,
+                            &automation_program,
+                            "automation-submitted",
+                            startup_started.elapsed(),
+                            1,
+                        );
+                    }
+                }
+            })
+            .detach();
+        }
+
+        let drain_session = session.clone();
+        let drain = cx.spawn(async move |view: WeakEntity<Self>, cx| {
+            let session = drain_session;
+            let mut first_output = true;
+            loop {
+                let chunk = match rx.recv().await {
+                    Ok(c) => c,
+                    Err(_) => break,
+                };
+
+                let mut output: Vec<u8> = Vec::new();
+                let mut exit: Option<ExitInfo> = None;
+                match chunk {
+                    ProfiledPtyChunk::Output { bytes, timing } => {
+                        if let Some(timing) = timing {
+                            profile::output_drained(instance_id, timing);
+                        }
+                        output.extend_from_slice(&bytes);
+                    }
+                    ProfiledPtyChunk::Exit {
+                        code,
+                        signal,
+                        read_error,
+                    } => {
+                        exit = Some(ExitInfo {
+                            code,
+                            signal,
+                            read_error,
+                        });
+                    }
+                }
+                coalesce_pending(&rx, instance_id, &mut output, &mut exit);
+
+                // Coalesce before taking the UI lock: bg agents always; focused
+                // stream bursts too (interaction priority is decided after parsing).
+                let focused_hint = session.is_focused();
+                if exit.is_none() && output.len() < MAX_BYTES_PER_TURN {
+                    let wait = if !focused_hint {
+                        Some(BACKGROUND_PAINT_INTERVAL)
+                    } else if output.len() >= 4096 {
+                        Some(FOCUSED_STREAM_INTERVAL)
+                    } else {
+                        None
+                    };
+                    if let Some(d) = wait {
+                        cx.background_executor().timer(d).await;
+                        coalesce_pending(&rx, instance_id, &mut output, &mut exit);
+                    }
+                }
+
+                let batch_len = output.len();
+                if first_output && batch_len > 0 {
+                    profile::startup_event(
+                        instance_id,
+                        &startup_program,
+                        "first-output",
+                        startup_started.elapsed(),
+                        batch_len,
+                    );
+                    first_output = false;
+                }
+                if batch_len > 0 {
+                    profile::output_update_requested(instance_id);
+                }
+                let stop = view
+                    .update(cx, |view, cx| {
+                        let focused = view.session.is_focused();
+                        if !output.is_empty() {
+                            profile::output_update_started(instance_id);
+                            let t0 = Instant::now();
+                            view.session.process_output(&output);
+                            if !view.has_visible_content
+                                && !view.session.visible_text().trim().is_empty()
+                            {
+                                view.has_visible_content = true;
+                                profile::startup_event(
+                                    instance_id,
+                                    &startup_program,
+                                    "first-screen",
+                                    startup_started.elapsed(),
+                                    batch_len,
+                                );
+                            }
+                            profile::process_output(instance_id, batch_len, t0.elapsed(), focused);
+                            if focused && profile::is_enabled() {
+                                let (col, row) = view.session.cursor_position();
+                                profile::cursor_probe_update(instance_id, col, row);
+                            }
+                            for (ty, text) in view.session.take_clipboard_stores() {
+                                write_clipboard(ty, text, cx);
+                            }
+                        }
+                        let stop = exit.is_some();
+                        if let Some(info) = exit.take() {
+                            view.exited = true;
+                            view.exit_code = info.code;
+                            view.exit_signal = info.signal;
+                            view.exit_read_error = info.read_error;
+                        }
+                        // Priority scheduler:
+                        // Recent input ≫ stream; every throttled batch gets one
+                        // trailing-edge notify if no later output arrives.
+                        let interactive = view.session.is_interactive();
+                        let min_interval = paint_min_interval(focused, interactive, stop);
+                        view.schedule_paint(min_interval, cx);
+                        stop
+                    })
+                    .unwrap_or(true);
+                if stop {
+                    break;
+                }
+            }
+        });
+
+        Self {
+            instance_id,
+            session,
+            focus_handle,
+            palette: TerminalPalette::default(),
+            font_family: SharedString::default(),
+            font_size: 14.0,
+            mouse_mode: TerminalMouseMode::default(),
+            exited: false,
+            exit_code: None,
+            exit_signal: None,
+            exit_read_error: None,
+            launch_error,
+            has_visible_content: false,
+            working_markers,
+            blocked_markers,
+            title_provider,
+            prev_raw: std::cell::Cell::new(None),
+            done_latch: std::cell::Cell::new(false),
+            completion_armed: std::cell::Cell::new(false),
+            provider_settled: std::cell::Cell::new(false),
+            semantic_title_status: std::cell::Cell::new(None),
+            grok_blocked_at: std::cell::Cell::new(None),
+            grok_screen_working_at: std::cell::Cell::new(None),
+            last_paint_notify: std::cell::Cell::new(std::time::Instant::now()),
+            profile_notify_generation: std::cell::Cell::new(0),
+            profile_last_notify_cause: std::cell::Cell::new(None),
+            profile_focus: focus_observer.is_some(),
+            pending_paint_deadline: std::cell::Cell::new(None),
+            paint_timer_generation: std::cell::Cell::new(0),
+            status_cache: std::cell::Cell::new(None),
+            _drain: drain,
+        }
+    }
+
+    pub fn session(&self) -> &Arc<TerminalSession> {
+        &self.session
+    }
+
+    pub fn exited(&self) -> bool {
+        self.exited
+    }
+
+    /// Whether the child has drawn anything a person can see. Agent TUIs often
+    /// emit control sequences immediately, then spend seconds starting before
+    /// their first text; those bytes must not dismiss loading UI.
+    pub fn has_visible_content(&self) -> bool {
+        self.has_visible_content
+    }
+
+    /// The child's exit code if it has exited and the OS reported one. `None`
+    /// while running or when the code is unknown (e.g. a bare PTY close).
+    pub fn exit_code(&self) -> Option<i32> {
+        self.exit_code
+    }
+
+    /// The signal that killed the child (`"Hangup"`, `"Killed"`, …), when one
+    /// did. A pane whose child was signalled reports `exit_code() == Some(1)`,
+    /// so this is the only way to tell it apart from a genuine `exit(1)`.
+    pub fn exit_signal(&self) -> Option<&str> {
+        self.exit_signal.as_deref()
+    }
+
+    /// The PTY read error that ended the session, when it wasn't a clean EOF.
+    /// The child may not have exited at all — surfaced for diagnostics.
+    pub fn exit_read_error(&self) -> Option<&str> {
+        self.exit_read_error.as_deref()
+    }
+
+    /// The error from a failed launch (program not on PATH, etc.), for the dev
+    /// console. `None` when the program launched (a fallback shell still ran).
+    pub fn launch_error(&self) -> Option<&str> {
+        self.launch_error.as_deref()
+    }
+
+    /// Snapshot fixed-size redraw correlation state for an app-level focus-path
+    /// loss. Callers keep this behind the opt-in profiler gate.
+    pub fn focus_profile(&self) -> TerminalFocusProfile {
+        let last_notify_cause = self.profile_last_notify_cause.get();
+        TerminalFocusProfile {
+            content_generation: self.session.content_generation(),
+            notify_generation: self.profile_notify_generation.get(),
+            last_notify_age: last_notify_cause.map(|_| self.last_paint_notify.get().elapsed()),
+            last_notify_cause,
+            notify_pending: self.pending_paint_deadline.get().is_some(),
+        }
+    }
+
+    /// The agent's lifecycle state, from its per-agent on-screen markers, the
+    /// bell, output activity, and process exit (see [`classify`]). Agents with no
+    /// markers fall back to the bell + activity heuristic.
+    pub fn status(&self) -> AgentStatus {
+        // Cache against content gen so sidebar/tick don't re-scan the grid every
+        // frame while the agent is idle. Bell and idle-time still force a recheck.
+        let content_gen = self.session.content_generation();
+        let (title_gen, title_text) = self.session.title_snapshot();
+        let bell = self.session.has_bell();
+        if !bell
+            && let Some((cached_gen, cached_title_gen, cached)) = self.status_cache.get()
+            && cached_gen == content_gen
+            && cached_title_gen == title_gen
+            && !self.exited
+        {
+            // Idle duration can advance Working→Idle without a content gen bump
+            // (no new output). Recompute when the activity heuristic might flip.
+            if !matches!(cached, AgentStatus::Working) {
+                return cached;
+            }
+        }
+
+        let observed_title = title_status(
+            self.title_provider,
+            title_text.as_deref(),
+            self.session.title_age(),
+        );
+        let submitted_turn = self.session.has_submitted_turn();
+        self.provider_settled.set(provider_settled_after_title(
+            self.provider_settled.get(),
+            observed_title,
+            submitted_turn,
+        ));
+        if let Some(status) = observed_title {
+            self.semantic_title_status.set(Some(status));
+        }
+        let mut title = sticky_title_status(self.semantic_title_status.get(), observed_title);
+        // Provider-owned titles and visible UI are independent strong evidence.
+        // Titles prevent PTY noise from forging state; they do not suppress a
+        // current permission form or background-work row.
+        let working_markers = self.working_markers.as_slice();
+        // Claude's title does not distinguish Idle from a visible permission
+        // prompt. Claude and Grok can both retain Idle titles while their
+        // foreground UI reports live background work.
+        let needs_provider_screen_scan = matches!(
+            self.title_provider,
+            TitleProvider::Claude | TitleProvider::Grok
+        );
+        let screen = if working_markers.is_empty()
+            && self.blocked_markers.is_empty()
+            && !needs_provider_screen_scan
+        {
+            String::new()
+        } else {
+            self.session.visible_text()
+        };
+        let base = classify(
+            self.exited,
+            &screen,
+            working_markers,
+            &self.blocked_markers,
+            bell,
+            self.title_provider == TitleProvider::Other,
+            self.session.idle_for(),
+        );
+        let provider_screen = provider_screen_status(self.title_provider, &screen);
+        let mut screen_working = working_markers.iter().any(|marker| screen.contains(marker))
+            || provider_screen == Some(AgentStatus::Working);
+        if self.title_provider == TitleProvider::Grok {
+            if title == Some(AgentStatus::Blocked) {
+                self.grok_blocked_at.set(Some(std::time::Instant::now()));
+            } else {
+                let blocked_age = self.grok_blocked_at.get().map(|at| at.elapsed());
+                title = hold_grok_blocked(title, blocked_age);
+                if matches!(title, Some(AgentStatus::Idle))
+                    || blocked_age.is_some_and(|age| age > Duration::from_millis(750))
+                {
+                    self.grok_blocked_at.set(None);
+                }
+            }
+
+            if provider_screen == Some(AgentStatus::Working) {
+                self.grok_screen_working_at
+                    .set(Some(std::time::Instant::now()));
+            } else {
+                let working_age = self.grok_screen_working_at.get().map(|at| at.elapsed());
+                screen_working = hold_grok_screen_working(screen_working, working_age);
+                if !screen_working {
+                    self.grok_screen_working_at.set(None);
+                }
+            }
+        }
+        if title != Some(AgentStatus::Blocked) && provider_screen == Some(AgentStatus::Blocked) {
+            title = provider_screen;
+        }
+        let raw = combine_title_status(self.exited, base, title, screen_working);
+        // Marker-less providers may latch only after proving that their semantic
+        // title protocol is live. Older/custom CLIs otherwise infer Working from
+        // typing echo and turn two seconds of quiet into a false completion.
+        let can_latch = can_latch_completion(
+            !self.working_markers.is_empty(),
+            self.semantic_title_status.get().is_some(),
+        );
+        let (status, latch, armed) = latch_done_after_readiness(
+            self.prev_raw.replace(Some(raw)),
+            raw,
+            self.done_latch.get(),
+            can_latch,
+            self.completion_armed.get(),
+            submitted_turn,
+        );
+        self.done_latch.set(latch);
+        self.completion_armed.set(armed);
+        self.status_cache
+            .set(Some((content_gen, title_gen, status)));
+        status
+    }
+
+    /// Whether this terminal has observed provider-owned Ready/Idle or a
+    /// submitted turn. Fallback PTY quiet is not startup-readiness evidence.
+    pub fn completion_ready(&self) -> bool {
+        self.provider_settled.get() || self.session.has_submitted_turn()
+    }
+
+    /// Whether `needle` appears in the current visible grid — used by the app to
+    /// spot an agent's "session not found" error for resume recovery.
+    pub fn screen_has(&self, needle: &str) -> bool {
+        self.session.visible_text().contains(needle)
+    }
+
+    /// The current visible grid as text (rows joined by newlines). Used by the
+    /// app's auto-continue to scan an agent's todo list.
+    pub fn visible_text(&self) -> String {
+        self.session.visible_text()
+    }
+
+    /// The last `max_lines` lines of scrollback + screen as text, soft wraps
+    /// rejoined. Used by read-aloud to find an agent's last reply.
+    pub fn recent_text(&self, max_lines: usize) -> String {
+        self.session.recent_text(max_lines)
+    }
+
+    pub fn title(&self) -> Option<String> {
+        self.session.title()
+    }
+
+    pub fn clear_title(&self) {
+        self.session.clear_title();
+    }
+
+    pub fn session_id_hint(&self) -> Option<String> {
+        self.session.session_id_hint()
+    }
+
+    pub fn child_pid(&self) -> Option<u32> {
+        self.session.child_pid()
+    }
+
+    /// Replace the color palette used to render this terminal. Also pushed into
+    /// the session so OSC color queries answer with what's actually painted.
+    pub fn set_palette(&mut self, palette: TerminalPalette) {
+        self.session.set_palette(palette.clone());
+        self.palette = palette;
+    }
+
+    /// Replace the font family + size (already scaled by zoom) used to render.
+    /// An empty family means "use the built-in per-OS monospace default".
+    pub fn set_config(&mut self, font_family: SharedString, font_size: f32) {
+        self.font_family = font_family;
+        self.font_size = font_size;
+    }
+
+    /// The active mouse copy/paste mode.
+    pub fn mouse_mode(&self) -> TerminalMouseMode {
+        self.mouse_mode
+    }
+
+    /// Link under the last pointer position, if the terminal grid can resolve one.
+    pub fn link_at_pointer(&self) -> Option<String> {
+        let hit = self.session.pointer_hit()?;
+        crate::element::link_at(
+            &self.session,
+            point(px(hit.local_x), px(hit.local_y)),
+            px(hit.cell_width),
+            px(hit.line_height),
+            hit.cols,
+            hit.rows,
+        )
+        .map(|link| link.url)
+    }
+
+    /// Set the mouse copy/paste mode (pushed from settings).
+    pub fn set_mouse_mode(&mut self, mode: TerminalMouseMode) {
+        self.mouse_mode = mode;
+    }
+
+    fn on_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let t0 = Instant::now();
+        let held = event.is_held;
+        let m = &event.keystroke.modifiers;
+
+        // Copy / paste. On macOS the platform shortcut is ⌘C / ⌘V; elsewhere
+        // ctrl-shift-c / ctrl-shift-v (plain ctrl-c must stay SIGINT).
+        //
+        // Plain Ctrl+V is host-side smart paste (Windows Terminal / VS Code
+        // style): text and file paths are injected into the PTY; an image
+        // forwards raw 0x16 so agents that read the OS clipboard (Grok) can
+        // attach it. Leaving Ctrl+V as bare 0x16 broke text paste in Claude —
+        // it does not host-paste on 0x16. Claude's image chord is Alt+V
+        // (ESC v via the keymap); we never intercept that.
+        // Classic Insert: Ctrl+Insert = copy, Shift+Insert = paste.
+        //
+        // Always `stop_propagation` when we consume a key. On Windows, Alt+letter
+        // is `WM_SYSKEYDOWN`; if gpui returns unhandled, DefWindowProc rings the
+        // system ding (Windows Terminal never does — it eats the message).
+        let key = event.keystroke.key.as_str();
+        if key == "insert" || key == "ins" {
+            if m.control && !m.alt && !m.shift {
+                if let Some(text) = self.session.selection_to_string()
+                    && !text.is_empty()
+                {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                }
+                cx.stop_propagation();
+                return;
+            }
+            if m.shift && !m.control && !m.alt {
+                paste_clipboard_into_session(&self.session, cx);
+                self.session.clear_selection();
+                cx.notify();
+                cx.stop_propagation();
+                return;
+            }
+        }
+        // Plain Ctrl+V — smart paste (see above). Must run before key_to_bytes
+        // would turn it into C0 0x16 unconditionally.
+        if key == "v" && m.control && !m.shift && !m.alt && !m.platform {
+            paste_clipboard_into_session(&self.session, cx);
+            self.session.clear_selection();
+            cx.notify();
+            cx.stop_propagation();
+            return;
+        }
+        let copy_paste = (m.control && m.shift && !m.alt)
+            || (cfg!(target_os = "macos") && m.platform && !m.control && !m.shift && !m.alt);
+        if copy_paste {
+            match key {
+                "c" => {
+                    if let Some(text) = self.session.selection_to_string()
+                        && !text.is_empty()
+                    {
+                        cx.write_to_clipboard(ClipboardItem::new_string(text));
+                    }
+                    cx.stop_propagation();
+                    return;
+                }
+                "v" => {
+                    paste_clipboard_into_session(&self.session, cx);
+                    self.session.clear_selection();
+                    cx.notify();
+                    cx.stop_propagation();
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        let mods = KeyModifiers {
+            control: m.control,
+            shift: m.shift,
+            alt: m.alt,
+            platform: m.platform,
+        };
+        let app_cursor = self.session.is_app_cursor_mode();
+        if let Some(bytes) = key_to_bytes(
+            &event.keystroke.key,
+            event.keystroke.key_char.as_deref(),
+            &mods,
+            app_cursor,
+        ) {
+            // Typing dismisses any selection highlight. The terminal doesn't
+            // echo locally — the typed character is drawn when the PTY echoes it
+            // back (which schedules its own repaint), so only repaint here when a
+            // selection was actually cleared. This halves repaints when a key is
+            // held down (e.g. Enter), keeping output smooth.
+            let cleared = self.session.clear_selection();
+            if event.keystroke.key.eq_ignore_ascii_case("enter") {
+                self.session.mark_turn_submitted();
+            }
+            profile::key_started(self.instance_id, t0);
+            self.session.write_input(&bytes);
+            if cleared {
+                cx.notify();
+            }
+            // Key path: gpui may sync-draw without presenting — arm the pump.
+            crate::present_flag::mark_present_needed();
+            cx.stop_propagation();
+            profile::key_finished(held, t0.elapsed());
+        }
+    }
+}
+
+/// Paste from the system clipboard into the PTY.
+/// Image → forward Ctrl+V (0x16) so the agent reads the OS clipboard.
+/// File paths → shell-quoted paths. Text → bracketed paste.
+pub fn paste_clipboard_into_session(session: &TerminalSession, cx: &App) {
+    let Some(item) = cx.read_from_clipboard() else {
+        return;
+    };
+    for entry in item.entries() {
+        match entry {
+            ClipboardEntry::Image(image) if !image.bytes.is_empty() => {
+                session.write_input(&[0x16]);
+                return;
+            }
+            ClipboardEntry::ExternalPaths(paths) => {
+                let paths: Vec<_> = paths.paths().to_vec();
+                if !paths.is_empty() {
+                    session.paste_paths(&paths);
+                    return;
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Some(text) = item.text() {
+        session.paste(&text);
+    }
+}
+
+/// Land an OSC-52 copy on the system clipboard — the primary selection where
+/// the platform has one, the normal clipboard otherwise.
+fn write_clipboard(ty: ClipboardType, text: String, cx: &mut Context<TerminalView>) {
+    if text.is_empty() {
+        return;
+    }
+    let item = ClipboardItem::new_string(text);
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    if ty == ClipboardType::Selection {
+        cx.write_to_primary(item);
+        return;
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+    let _ = ty;
+    cx.write_to_clipboard(item);
+}
+
+impl Focusable for TerminalView {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl Render for TerminalView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .track_focus(&self.focus_handle)
+            .key_context("Terminal")
+            .on_key_down(cx.listener(Self::on_key_down))
+            // OS file drops (Explorer → pane) arrive as an internal gpui drag of
+            // ExternalPaths, not as FileDropEvent listeners. Same path Zed uses.
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, _window, cx| {
+                this.session.paste_paths(paths.paths());
+                this.session.clear_selection();
+                cx.notify();
+            }))
+            .size_full()
+            // Fill the inset margin with the terminal background and inset the
+            // element so the grid (sized from the inner area) never butts against
+            // the pane edge — a too-wide TUI truncates inside the margin.
+            .bg(self.palette.background_hsla())
+            .p(TERM_INSET)
+            .child(TerminalElement::new(
+                self.instance_id,
+                self.session.clone(),
+                cx.entity_id(),
+                self.focus_handle.clone(),
+                self.palette.clone(),
+                self.font_family.clone(),
+                px(self.font_size),
+                self.mouse_mode,
+            ))
+    }
+}
+
+// These tests spawn real processes, so they are Unix-only.
+#[cfg(all(test, unix))]
+mod launch_tests {
+    // Import specifically (not `super::*`) so `#[test]` resolves to the built-in
+    // macro, not gpui's glob-imported `test` attribute.
+    use super::TerminalLaunch;
+    use crate::session::CommandSpec;
+
+    #[test]
+    fn bad_program_falls_back_to_shell_with_error() {
+        let launch = TerminalLaunch::spawn(
+            CommandSpec::program("/definitely/not/here-muxal", vec![]),
+            (80, 24),
+        )
+        .expect("fallback shell should spawn");
+        assert!(
+            launch.launch_error().is_some(),
+            "the original failure is kept for the dev console"
+        );
+        launch.session.kill();
+    }
+
+    #[test]
+    fn double_failure_is_an_error_not_a_panic() {
+        let bogus = CommandSpec::program("/definitely/not/here-muxal", vec![]);
+        let result = TerminalLaunch::spawn_with_fallback(bogus.clone(), bogus, (80, 24), None);
+        assert!(result.is_err(), "total failure must surface as Err");
+    }
+
+    #[test]
+    fn good_program_has_no_launch_error() {
+        let launch = TerminalLaunch::spawn(CommandSpec::program("/bin/cat", vec![]), (80, 24))
+            .expect("spawn cat");
+        assert!(launch.launch_error().is_none());
+        launch.session.kill();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Import specifically (not `super::*`) so `#[test]` resolves to the built-in
+    // macro, not gpui's glob-imported `test` attribute.
+    use super::{
+        AgentStatus, BACKGROUND_PAINT_INTERVAL, FOCUSED_INTERACTION_INTERVAL,
+        FOCUSED_STREAM_INTERVAL, PaintSchedule, TerminalMouseMode, TitleProvider,
+        can_latch_completion, classify, clean_agent_title, combine_title_status, hold_grok_blocked,
+        hold_grok_screen_working, latch_done, latch_done_after_readiness, next_paint_schedule,
+        paint_min_interval, provider_screen_status, provider_settled_after_title,
+        sticky_title_status, title_status,
+    };
+    use std::time::Duration;
+
+    fn m(s: &[&str]) -> Vec<String> {
+        s.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn markerless_provider_must_prove_semantic_titles_before_latching() {
+        assert!(!can_latch_completion(false, false));
+        assert!(can_latch_completion(false, true));
+        assert!(can_latch_completion(true, false));
+    }
+
+    #[test]
+    fn claude_current_and_legacy_titles_have_explicit_edges() {
+        for working in [
+            "◐ Review changes",
+            "◑ Review changes",
+            "◒ Review changes",
+            "◓ Review changes",
+            "⠂ Review changes",
+            "⠐ Review changes",
+        ] {
+            assert_eq!(
+                title_status(
+                    TitleProvider::Claude,
+                    Some(working),
+                    Some(Duration::from_secs(4)),
+                ),
+                Some(AgentStatus::Working),
+                "rejected Claude busy title {working:?}"
+            );
+        }
+        assert_eq!(
+            title_status(
+                TitleProvider::Claude,
+                Some("✳ Review changes"),
+                Some(Duration::from_secs(30))
+            ),
+            Some(AgentStatus::Idle)
+        );
+    }
+
+    #[test]
+    fn claude_visible_permission_form_overrides_idle_title() {
+        let permission = "Do you want to proceed?\n❯ 1. Yes\n  2. Yes, and don't ask again\n  3. No\nEsc to cancel";
+        let screen_status = provider_screen_status(TitleProvider::Claude, permission);
+        assert_eq!(screen_status, Some(AgentStatus::Blocked));
+        assert_eq!(
+            combine_title_status(false, AgentStatus::Idle, screen_status, false),
+            AgentStatus::Blocked
+        );
+
+        let selection =
+            "Choose an answer\nEnter to select · Tab/Arrow keys to navigate · Esc to cancel";
+        assert_eq!(
+            provider_screen_status(TitleProvider::Claude, selection),
+            Some(AgentStatus::Blocked)
+        );
+
+        for screen in [
+            "Select model\nEnter to set as default\nEsc to cancel",
+            "Claude said: Do you want to proceed?\nEsc to cancel",
+            "❯ 1. Yes\nEsc to cancel",
+        ] {
+            assert_eq!(
+                provider_screen_status(TitleProvider::Claude, screen),
+                None,
+                "ordinary UI forged Blocked: {screen:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn lifecycle_signal_precedence_is_explicit() {
+        use AgentStatus::{Blocked, Done, Idle, Working};
+
+        let cases = [
+            ("exit", true, Working, Some(Blocked), true, Done),
+            (
+                "screen blocked",
+                false,
+                Blocked,
+                Some(Working),
+                true,
+                Blocked,
+            ),
+            ("title blocked", false, Idle, Some(Blocked), true, Blocked),
+            ("screen working", false, Working, Some(Idle), true, Working),
+            ("title working", false, Idle, Some(Working), false, Working),
+            ("title idle", false, Working, Some(Idle), false, Idle),
+            ("bell done", false, Done, Some(Idle), false, Done),
+            ("base fallback", false, Idle, None, false, Idle),
+        ];
+
+        for (name, exited, base, title, screen_working, expected) in cases {
+            assert_eq!(
+                combine_title_status(exited, base, title, screen_working),
+                expected,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn codex_forced_title_contract_separates_agent_from_background_output() {
+        for idle in ["Review title | Ready", "Review title | Ready ·"] {
+            assert_eq!(
+                title_status(TitleProvider::Codex, Some(idle), Some(Duration::ZERO)),
+                Some(AgentStatus::Idle),
+                "rejected idle title {idle:?}"
+            );
+        }
+        for working in [
+            "Review title | Starting ⠦",
+            "Review title | Working ⠋",
+            "Review title | Thinking ⠙",
+            "Review title | Waiting ⠹",
+            "Review title | Working",
+            "Review title | Starting · ⠦",
+        ] {
+            assert_eq!(
+                title_status(TitleProvider::Codex, Some(working), Some(Duration::ZERO)),
+                Some(AgentStatus::Working),
+                "rejected working title {working:?}"
+            );
+        }
+        for blocked in [
+            "[ ! ] Action Required | Review title",
+            "[ . ] Action Required | Review | title",
+            "Review title | Ready · action required",
+        ] {
+            assert_eq!(
+                title_status(TitleProvider::Codex, Some(blocked), Some(Duration::ZERO)),
+                Some(AgentStatus::Blocked),
+                "rejected blocked title {blocked:?}"
+            );
+        }
+        assert_eq!(
+            combine_title_status(false, AgentStatus::Working, Some(AgentStatus::Idle), false),
+            AgentStatus::Idle
+        );
+        assert_eq!(
+            classify(
+                false,
+                "typing echoed by the TUI",
+                &[],
+                &[],
+                false,
+                false,
+                Duration::from_millis(10),
+            ),
+            AgentStatus::Idle
+        );
+        for foreign in [
+            "Ready",
+            "Ready ·",
+            "Working ⠋",
+            "Review title | Working on tests",
+            "[ ! ] Action Requiredly | Review title",
+        ] {
+            assert_eq!(
+                title_status(TitleProvider::Codex, Some(foreign), Some(Duration::ZERO)),
+                None,
+                "accepted foreign title {foreign:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn grok_spinner_is_working_independent_of_activity_prose() {
+        for working in [
+            "⠦ - Responding - Review title - grok",
+            "⠦ - Waiting for response… - Review title - grok",
+            "⠋ - Writing command… - Review title - grok",
+            "⠙ - Writing file… - Review title - grok",
+            "⠹ - Run harmless Get-Date command… - grok",
+            "⠸ - Preparing MCP tool… - Review title - grok",
+        ] {
+            assert_eq!(
+                title_status(
+                    TitleProvider::Grok,
+                    Some(working),
+                    Some(Duration::from_secs(30)),
+                ),
+                Some(AgentStatus::Working),
+                "rejected Grok busy title {working:?}"
+            );
+        }
+        assert_eq!(
+            title_status(
+                TitleProvider::Grok,
+                Some("⚠ Action Required - ⠋ - Preparing question… - Review title - grok"),
+                Some(Duration::from_millis(300))
+            ),
+            Some(AgentStatus::Blocked)
+        );
+        assert_eq!(
+            title_status(
+                TitleProvider::Grok,
+                Some("Review title - grok"),
+                Some(Duration::from_secs(30))
+            ),
+            Some(AgentStatus::Idle)
+        );
+        assert_eq!(
+            title_status(
+                TitleProvider::Grok,
+                Some("Custom title with no provider state"),
+                Some(Duration::ZERO)
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn claude_live_foreground_row_overrides_idle_title() {
+        assert_eq!(
+            provider_screen_status(
+                TitleProvider::Claude,
+                "⎿  Running…\n\n✻ Unravelling… (3s · ↓ 117 tokens)\n\n  esc to in…"
+            ),
+            Some(AgentStatus::Working)
+        );
+        assert_eq!(
+            provider_screen_status(
+                TitleProvider::Claude,
+                "✻ Chewing on it… (1m 20s · ↓ 2.6k tokens)"
+            ),
+            Some(AgentStatus::Working)
+        );
+        for idle_or_quoted in [
+            "✻ Brewed for 12s · done 11:22 AM",
+            "quoted: ✻ Chewing on it… (20s · ↓ 171 tokens)",
+            "> ✻ Chewing on it… (20s · ↓ 171 tokens)",
+            "✻ Chewing on it… (soon · ↓ 171 tokens)",
+            "✻ Chewing on it… (20s · tokens)",
+            "✻ … (20s · ↓ 171 tokens)",
+            "✻ Chewing on it… (3s 1h · ↓ 171 tokens)",
+            "✻ Chewing on it… (1m 2m · ↓ 171 tokens)",
+            "✻ Chewing on it… (1s 2m · ↓ 171 tokens)",
+            "✻ Chewing on it… (20s · ↑↓171 tokens)",
+            "✻ Chewing on it… (20s · ↓171 tokens)",
+            "✻ Chewing on it… (20s · 1e3 tokens)",
+            "✻ Chewing on it… (20s · +171 tokens)",
+            "✻ Chewing on it… (20s · ↓ 2.6 tokens)",
+            "✻ Chewing on it… (20s · .5k tokens)",
+            "✻ Chewing on it… (20s · 2..6k tokens)",
+        ] {
+            assert_eq!(
+                provider_screen_status(TitleProvider::Claude, idle_or_quoted),
+                None,
+                "accepted Claude foreground lookalike {idle_or_quoted:?}"
+            );
+        }
+
+        assert_eq!(
+            provider_screen_status(
+                TitleProvider::Claude,
+                "✻ Chewing on it… (20s · ↓ 171 tokens)\n\nThat was the exact row under discussion.\n\n✻ Brewed for 21s · done 11:22 AM"
+            ),
+            None,
+            "an earlier exact row must not override newer completion evidence"
+        );
+
+        let live_background_above_long_output = format!(
+            "· 1 command still running · send a message to interrupt\n{}",
+            (0..20)
+                .map(|line| format!("ordinary output {line}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        assert_eq!(
+            provider_screen_status(TitleProvider::Claude, &live_background_above_long_output),
+            Some(AgentStatus::Working),
+            "live background work must not disappear beyond an arbitrary row window"
+        );
+    }
+
+    #[test]
+    fn live_background_command_overrides_idle_title() {
+        assert_eq!(
+            provider_screen_status(
+                TitleProvider::Claude,
+                "· 1 command still running · send a message to interrupt"
+            ),
+            Some(AgentStatus::Working)
+        );
+        assert_eq!(
+            provider_screen_status(TitleProvider::Claude, "Ready for another prompt"),
+            None
+        );
+        assert_eq!(
+            provider_screen_status(
+                TitleProvider::Claude,
+                "The log says: 1 command still running; investigate it."
+            ),
+            None
+        );
+        assert_eq!(
+            provider_screen_status(
+                TitleProvider::Claude,
+                "quoted: · 1 command still running · send a message to interrupt later"
+            ),
+            None
+        );
+        assert_eq!(
+            provider_screen_status(
+                TitleProvider::Claude,
+                "  · 2 commands still running · send a message to interrupt  "
+            ),
+            Some(AgentStatus::Working)
+        );
+        assert_eq!(
+            provider_screen_status(
+                TitleProvider::Claude,
+                "✻ Brewed for 15s · 1 shell still running"
+            ),
+            Some(AgentStatus::Working)
+        );
+        assert_eq!(
+            provider_screen_status(
+                TitleProvider::Claude,
+                "✻ Crunched for 1m 2s · 2 shells still running"
+            ),
+            Some(AgentStatus::Working)
+        );
+        assert_eq!(
+            provider_screen_status(
+                TitleProvider::Claude,
+                "✻ Brewed for 15s · done 11:22 AM\nAuto mode on · 1 shell ·   \n2 agents"
+            ),
+            Some(AgentStatus::Working),
+            "a footer wrapped at a word boundary must remain live"
+        );
+        assert_eq!(
+            provider_screen_status(
+                TitleProvider::Claude,
+                "✻ Brewed for 15s · done 11:22 AM\nAuto mode on · 1 shell · 2 ag\nents"
+            ),
+            Some(AgentStatus::Working),
+            "a footer wrapped inside a task kind must remain live"
+        );
+        assert_eq!(
+            provider_screen_status(
+                TitleProvider::Claude,
+                "✻ Brewed for 15s · done 11:22 AM\nAuto mode on · 1 shell · 2 agents"
+            ),
+            Some(AgentStatus::Working),
+            "Claude's current task footer must override the completed foreground row"
+        );
+        assert_eq!(
+            provider_screen_status(
+                TitleProvider::Claude,
+                "✻ Brewed for 15s · done 11:22 AM\nAuto mode on · 1 shell, 2 monitors · 1 local agent"
+            ),
+            Some(AgentStatus::Working)
+        );
+        assert_eq!(
+            provider_screen_status(
+                TitleProvider::Claude,
+                "Auto mode on · 1 shell · 2 agents\n✻ Brewed for 15s · done 11:22 AM"
+            ),
+            None,
+            "a stale footer must not override a newer completion row"
+        );
+        for false_positive in [
+            "✻ Brewed for 15s · 0 shells still running",
+            "✻ Brewed for 15s · 1 shells still running",
+            "quoted: ✻ Brewed for 15s · 1 shell still running",
+            "✻ Brewed for 15s · 1 shell still running later",
+            "Auto mode on",
+            "Auto mode on · 0 shells",
+            "Auto mode on · 1 shells",
+            "Auto mode on · 2 shell",
+            "Auto mode on · 1 worker",
+            "Auto mode on · 1 shell · 1 hook",
+            "Auto mode on · 1 shell ·",
+            "quoted: Auto mode on · 1 shell · 2 agents",
+            "Auto mode off · 1 shell · 2 agents",
+        ] {
+            assert_eq!(
+                provider_screen_status(TitleProvider::Claude, false_positive),
+                None,
+                "accepted Claude background lookalike {false_positive:?}"
+            );
+        }
+        assert_eq!(
+            provider_screen_status(
+                TitleProvider::Grok,
+                "· 1 command still running · send a message to interrupt"
+            ),
+            Some(AgentStatus::Working)
+        );
+        assert_eq!(
+            provider_screen_status(
+                TitleProvider::Grok,
+                "◎ 2 commands still running · send a message to interrupt"
+            ),
+            Some(AgentStatus::Working)
+        );
+        assert_eq!(
+            provider_screen_status(
+                TitleProvider::Grok,
+                "◎ 1 command · 2 monitors · 1 loop · 1 subagent still running"
+            ),
+            Some(AgentStatus::Working)
+        );
+        assert_eq!(
+            provider_screen_status(TitleProvider::Grok, "◎ 1 monitor · 2 loops still running"),
+            Some(AgentStatus::Working)
+        );
+        assert_eq!(
+            provider_screen_status(
+                TitleProvider::Grok,
+                "◎ waiting · send a message to interrupt"
+            ),
+            None
+        );
+        assert_eq!(
+            provider_screen_status(
+                TitleProvider::Grok,
+                "◎ 0 commands still running · send a message to interrupt"
+            ),
+            None
+        );
+        assert_eq!(
+            provider_screen_status(
+                TitleProvider::Grok,
+                "quoted: ◎ 1 command still running · send a message to interrupt later"
+            ),
+            None
+        );
+        assert_eq!(
+            provider_screen_status(
+                TitleProvider::Grok,
+                "◎ 1 commands still running · send a message to interrupt"
+            ),
+            None
+        );
+        assert_eq!(
+            provider_screen_status(TitleProvider::Grok, "◎ 1 workflow still running"),
+            None
+        );
+    }
+
+    #[test]
+    fn grok_background_row_gaps_do_not_complete_until_stable_absence() {
+        use AgentStatus::{Done, Idle, Working};
+
+        assert!(hold_grok_screen_working(true, None));
+        assert!(hold_grok_screen_working(
+            false,
+            Some(Duration::from_millis(1999))
+        ));
+        assert!(!hold_grok_screen_working(
+            false,
+            Some(Duration::from_millis(2001))
+        ));
+        assert!(!hold_grok_screen_working(false, None));
+
+        let (status, latch, armed) =
+            latch_done_after_readiness(Some(Idle), Working, false, true, true, false);
+        assert_eq!(status, Working);
+        let (status, latch, armed) =
+            latch_done_after_readiness(Some(Working), Working, latch, true, armed, false);
+        assert_eq!(status, Working, "one missing row frame forged completion");
+        let (status, latch, _) =
+            latch_done_after_readiness(Some(Working), Idle, latch, true, armed, false);
+        assert_eq!(status, Done, "stable absence did not complete the turn");
+        let (status, _, _) =
+            latch_done_after_readiness(Some(Idle), Idle, latch, true, armed, false);
+        assert_eq!(status, Done, "completion did not remain latched");
+    }
+
+    #[test]
+    fn grok_action_required_blink_does_not_flicker_status() {
+        assert_eq!(
+            hold_grok_blocked(Some(AgentStatus::Working), Some(Duration::from_millis(500))),
+            Some(AgentStatus::Blocked)
+        );
+        assert_eq!(
+            hold_grok_blocked(Some(AgentStatus::Working), Some(Duration::from_millis(751))),
+            Some(AgentStatus::Working)
+        );
+        assert_eq!(
+            hold_grok_blocked(Some(AgentStatus::Idle), Some(Duration::from_millis(100))),
+            Some(AgentStatus::Idle)
+        );
+    }
+
+    #[test]
+    fn traced_title_edges_override_pty_noise_and_latch_done() {
+        let grok_working = title_status(
+            TitleProvider::Grok,
+            Some("⠹ - Responding - Review title - grok"),
+            Some(Duration::from_millis(300)),
+        );
+        let raw_working = combine_title_status(false, AgentStatus::Idle, grok_working, false);
+        assert_eq!(raw_working, AgentStatus::Working);
+
+        let grok_idle = title_status(
+            TitleProvider::Grok,
+            Some("Review title - grok"),
+            Some(Duration::from_millis(300)),
+        );
+        let raw_idle = combine_title_status(
+            false,
+            AgentStatus::Working, // incidental PTY redraw/background output
+            grok_idle,
+            false,
+        );
+        assert_eq!(raw_idle, AgentStatus::Idle);
+        assert_eq!(
+            latch_done(Some(AgentStatus::Working), raw_idle, false, true),
+            (AgentStatus::Done, true)
+        );
+
+        // Typing while an already-idle title is present cannot manufacture a
+        // Working→Done edge from the PTY activity heuristic.
+        let typed = combine_title_status(false, AgentStatus::Working, grok_idle, false);
+        assert_eq!(
+            latch_done(Some(AgentStatus::Idle), typed, false, true),
+            (AgentStatus::Idle, false)
+        );
+    }
+
+    #[test]
+    fn foreign_titles_never_become_lifecycle_state() {
+        for provider in [
+            TitleProvider::Claude,
+            TitleProvider::Codex,
+            TitleProvider::Grok,
+            TitleProvider::Other,
+        ] {
+            assert_eq!(
+                title_status(
+                    provider,
+                    Some("npm run test-v8-historical"),
+                    Some(Duration::ZERO)
+                ),
+                None
+            );
+        }
+        assert_eq!(
+            title_status(
+                TitleProvider::Codex,
+                Some("npm run ready"),
+                Some(Duration::ZERO)
+            ),
+            None
+        );
+        assert_eq!(
+            title_status(
+                TitleProvider::Claude,
+                Some("✳not a Claude frame"),
+                Some(Duration::ZERO)
+            ),
+            None
+        );
+        assert_eq!(
+            title_status(
+                TitleProvider::Grok,
+                Some("Thinking - Review title"),
+                Some(Duration::ZERO)
+            ),
+            None
+        );
+        for name in [
+            "Thinking",
+            "Responding",
+            "Running tool",
+            "Compacting",
+            "Waiting for tests",
+            "Running: npm",
+            "Retrying (1)",
+        ] {
+            let title = format!("{name} - grok");
+            assert_eq!(
+                title_status(TitleProvider::Grok, Some(&title), Some(Duration::ZERO)),
+                Some(AgentStatus::Idle),
+                "session name forged lifecycle: {name:?}"
+            );
+            assert_eq!(clean_agent_title("grok", &title).as_deref(), Some(name));
+        }
+        for title in [
+            "⚠ Action Required - grok",
+            "⚠ Action Required - Review - grok",
+            "⚠ Action Required - ⠋ - grok",
+            "⠋ - grok",
+        ] {
+            assert_eq!(
+                title_status(TitleProvider::Grok, Some(title), Some(Duration::ZERO)),
+                None,
+                "incomplete reserved prefix forged lifecycle: {title:?}"
+            );
+            assert!(clean_agent_title("grok", title).is_some());
+        }
+    }
+
+    #[test]
+    fn foreign_titles_cannot_erase_a_provider_lifecycle_observation() {
+        use AgentStatus::{Idle, Working};
+
+        let working = title_status(
+            TitleProvider::Codex,
+            Some("Review changes | Working ⠋"),
+            Some(Duration::ZERO),
+        );
+        assert_eq!(sticky_title_status(None, working), Some(Working));
+        assert_eq!(sticky_title_status(working, None), Some(Working));
+        assert_eq!(
+            sticky_title_status(
+                working,
+                title_status(TitleProvider::Codex, Some("Ready ·"), Some(Duration::ZERO))
+            ),
+            Some(Working)
+        );
+
+        let idle = title_status(
+            TitleProvider::Codex,
+            Some("Review changes | Ready"),
+            Some(Duration::ZERO),
+        );
+        assert_eq!(sticky_title_status(working, idle), Some(Idle));
+    }
+
+    #[test]
+    fn provider_detection_requires_an_exact_executable_name() {
+        assert_eq!(
+            TitleProvider::from_program("C:\\tools\\codex.cmd"),
+            TitleProvider::Codex
+        );
+        assert_eq!(
+            TitleProvider::from_program("claude.exe"),
+            TitleProvider::Claude
+        );
+        assert_eq!(TitleProvider::from_program("grok"), TitleProvider::Grok);
+        assert_eq!(
+            TitleProvider::from_program("codex-title-proxy.exe"),
+            TitleProvider::Other
+        );
+    }
+
+    #[test]
+    fn lifecycle_decoration_does_not_leak_into_pane_names() {
+        assert_eq!(
+            clean_agent_title("claude", "✳ Review changes").as_deref(),
+            Some("Review changes")
+        );
+        assert_eq!(clean_agent_title("codex", "Ready"), None);
+        assert_eq!(
+            clean_agent_title("codex", "Review changes | Ready").as_deref(),
+            Some("Review changes")
+        );
+        assert_eq!(
+            clean_agent_title(
+                "grok",
+                "⠦ - Waiting for response… - User requests exact OK reply - grok"
+            )
+            .as_deref(),
+            Some("User requests exact OK reply")
+        );
+        assert_eq!(clean_agent_title("grok", "grok"), None);
+        for program in ["claude", "codex", "grok"] {
+            assert_eq!(
+                clean_agent_title(program, "npm run test-v8-historical"),
+                None
+            );
+        }
+        assert_eq!(
+            clean_agent_title("pwsh", "D:\\dev\\muxal").as_deref(),
+            Some("D:\\dev\\muxal")
+        );
+    }
+
+    #[test]
+    fn mouse_mode_from_setting() {
+        use TerminalMouseMode::*;
+        assert_eq!(TerminalMouseMode::from_setting("copy_paste"), CopyPaste);
+        assert_eq!(TerminalMouseMode::from_setting("menu"), RightClickMenu);
+        assert_eq!(
+            TerminalMouseMode::from_setting("copy_on_select"),
+            CopyOnSelect
+        );
+        // Unknown / empty falls back to the default.
+        assert_eq!(TerminalMouseMode::from_setting(""), CopyPaste);
+        assert_eq!(TerminalMouseMode::from_setting("bogus"), CopyPaste);
+        assert_eq!(TerminalMouseMode::default(), CopyPaste);
+    }
+
+    #[test]
+    fn classify_priority() {
+        let working = m(&["esc to interrupt"]);
+        let blocked = m(&["Do you want to proceed"]);
+        let busy = Duration::from_millis(100);
+        let quiet = Duration::from_secs(10);
+
+        // Exit wins over everything.
+        assert_eq!(
+            classify(
+                true,
+                "esc to interrupt",
+                &working,
+                &blocked,
+                true,
+                false,
+                busy,
+            ),
+            AgentStatus::Done
+        );
+        // Working marker beats a stale bell when no input request is present.
+        assert_eq!(
+            classify(
+                false,
+                "… esc to interrupt",
+                &working,
+                &blocked,
+                true,
+                false,
+                quiet,
+            ),
+            AgentStatus::Working
+        );
+        // Blocked marker beats the bell.
+        assert_eq!(
+            classify(
+                false,
+                "Do you want to proceed?",
+                &working,
+                &blocked,
+                true,
+                false,
+                quiet,
+            ),
+            AgentStatus::Blocked
+        );
+        // A permission prompt is actionable even if the provider leaves its
+        // ordinary working footer visible behind the modal.
+        assert_eq!(
+            classify(
+                false,
+                "esc to interrupt\nDo you want to proceed?",
+                &working,
+                &blocked,
+                false,
+                false,
+                busy,
+            ),
+            AgentStatus::Blocked
+        );
+        // Bell with no marker on screen = finished a turn.
+        assert_eq!(
+            classify(false, "all done", &working, &blocked, true, false, quiet,),
+            AgentStatus::Done
+        );
+        // With a working marker configured, output activity (e.g. typing) does
+        // NOT imply working — only the marker does. So no marker + recent output
+        // is still Idle, not Working.
+        assert_eq!(
+            classify(false, "", &working, &blocked, false, false, busy),
+            AgentStatus::Idle
+        );
+        assert_eq!(
+            classify(false, "", &working, &blocked, false, false, quiet),
+            AgentStatus::Idle
+        );
+    }
+
+    #[test]
+    fn classify_marker_less_agent_uses_heuristic_only_when_opted_in() {
+        let none: Vec<String> = Vec::new();
+        assert_eq!(
+            classify(false, "", &none, &none, true, true, Duration::from_secs(10),),
+            AgentStatus::Done
+        );
+        assert_eq!(
+            classify(
+                false,
+                "",
+                &none,
+                &none,
+                false,
+                true,
+                Duration::from_millis(100),
+            ),
+            AgentStatus::Working
+        );
+        assert_eq!(
+            classify(
+                false,
+                "",
+                &none,
+                &none,
+                false,
+                true,
+                Duration::from_secs(10),
+            ),
+            AgentStatus::Idle
+        );
+        assert_eq!(
+            classify(
+                false,
+                "typing echoed by a known provider",
+                &none,
+                &none,
+                false,
+                false,
+                Duration::from_millis(100),
+            ),
+            AgentStatus::Idle
+        );
+    }
+
+    #[test]
+    fn done_latch_holds_a_finished_turn() {
+        use AgentStatus::{Blocked, Done, Idle, Working};
+        // Working → idle (no bell) latches Done...
+        assert_eq!(latch_done(Some(Working), Idle, false, true), (Done, true));
+        // ...and holds it across later idle ticks.
+        assert_eq!(latch_done(Some(Idle), Idle, true, true), (Done, true));
+        // Working again clears the latch.
+        assert_eq!(
+            latch_done(Some(Idle), Working, true, true),
+            (Working, false)
+        );
+        // A bell/exit Done latches through later Idle samples.
+        assert_eq!(latch_done(Some(Working), Done, false, true), (Done, true));
+        assert_eq!(latch_done(Some(Done), Idle, true, true), (Done, true));
+        // Idle not preceded by working stays idle (a fresh pane).
+        assert_eq!(latch_done(None, Idle, false, true), (Idle, false));
+        // Blocked passes through and clears the latch.
+        assert_eq!(
+            latch_done(Some(Idle), Blocked, true, true),
+            (Blocked, false)
+        );
+    }
+
+    #[test]
+    fn marker_less_terminals_never_latch_done() {
+        use AgentStatus::{Done, Idle, Working};
+        // With `can_latch` false (a shell / marker-less agent), a working→idle
+        // transition stays Idle instead of latching Done — incidental output
+        // (e.g. a focus-change redraw on click) must not fake a finished turn.
+        assert_eq!(latch_done(Some(Working), Idle, false, false), (Idle, false));
+        // A stuck latch can't survive once latching is disallowed.
+        assert_eq!(latch_done(Some(Idle), Idle, true, false), (Idle, false));
+        // Bell/exit is precise enough to latch without semantic Working evidence.
+        assert_eq!(latch_done(Some(Working), Done, false, false), (Done, true));
+        assert_eq!(latch_done(Some(Done), Idle, true, false), (Idle, false));
+    }
+
+    #[test]
+    fn startup_working_to_idle_arms_without_claiming_done() {
+        use AgentStatus::{Done, Idle, Working};
+        let (status, latch, armed) =
+            latch_done_after_readiness(None, Working, false, true, false, false);
+        assert_eq!((status, latch, armed), (Working, false, false));
+        let (status, latch, armed) =
+            latch_done_after_readiness(Some(Working), Idle, latch, true, armed, false);
+        assert_eq!((status, latch, armed), (Idle, false, true));
+        let (_, latch, armed) =
+            latch_done_after_readiness(Some(Idle), Working, latch, true, armed, false);
+        assert_eq!(
+            latch_done_after_readiness(Some(Working), Idle, latch, true, armed, false),
+            (Done, true, true)
+        );
+    }
+
+    #[test]
+    fn immediate_submission_arms_a_turn_during_startup() {
+        use AgentStatus::{Done, Idle, Working};
+        let (_, latch, armed) = latch_done_after_readiness(None, Working, false, true, false, true);
+        assert_eq!(
+            latch_done_after_readiness(Some(Working), Idle, latch, true, armed, true),
+            (Done, true, true)
+        );
+    }
+
+    #[test]
+    fn provider_readiness_ignores_fallback_idle_before_semantic_startup() {
+        use AgentStatus::{Idle, Working};
+        let settled = provider_settled_after_title(false, None, false);
+        assert!(!settled);
+        let settled = provider_settled_after_title(settled, Some(Working), false);
+        assert!(!settled);
+        let settled = provider_settled_after_title(settled, Some(Idle), false);
+        assert!(settled);
+        assert!(provider_settled_after_title(settled, Some(Working), false));
+    }
+
+    #[test]
+    fn paint_priority_interaction_beats_stream() {
+        assert_eq!(
+            paint_min_interval(true, true, false),
+            FOCUSED_INTERACTION_INTERVAL
+        );
+        assert_eq!(
+            paint_min_interval(true, false, false),
+            FOCUSED_STREAM_INTERVAL
+        );
+        assert_eq!(
+            paint_min_interval(false, false, false),
+            BACKGROUND_PAINT_INTERVAL
+        );
+        assert_eq!(
+            paint_min_interval(false, true, false),
+            BACKGROUND_PAINT_INTERVAL
+        );
+        assert_eq!(paint_min_interval(true, false, true), Duration::ZERO);
+        assert!(FOCUSED_INTERACTION_INTERVAL < FOCUSED_STREAM_INTERVAL);
+        assert!(FOCUSED_STREAM_INTERVAL < BACKGROUND_PAINT_INTERVAL);
+    }
+
+    #[test]
+    fn throttled_paint_gets_one_trailing_deadline() {
+        let last = std::time::Instant::now();
+        let now = last + Duration::from_millis(10);
+        let deadline = last + FOCUSED_STREAM_INTERVAL;
+        assert_eq!(
+            next_paint_schedule(last, None, now, FOCUSED_STREAM_INTERVAL),
+            PaintSchedule::At(deadline)
+        );
+        assert_eq!(
+            next_paint_schedule(
+                last,
+                Some(deadline),
+                now + Duration::from_millis(1),
+                FOCUSED_STREAM_INTERVAL,
+            ),
+            PaintSchedule::KeepPending
+        );
+        assert_eq!(
+            next_paint_schedule(last, Some(deadline), deadline, FOCUSED_STREAM_INTERVAL),
+            PaintSchedule::Now
+        );
+    }
+}

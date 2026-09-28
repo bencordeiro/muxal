@@ -3,19 +3,19 @@
 <plist version="1.0">
 <dict>
   <key>CFBundleName</key>
-  <string>muxel</string>
+  <string>muxal</string>
   <key>CFBundleDisplayName</key>
-  <string>muxel</string>
+  <string>muxal</string>
   <key>CFBundleIdentifier</key>
-  <string>io.github.projecthax.muxel</string>
+  <string>io.github.projecthax.muxal</string>
   <key>CFBundleVersion</key>
   <string>0.4.0</string>
   <key>CFBundleShortVersionString</key>
   <string>0.4.0</string>
   <key>CFBundleExecutable</key>
-  <string>muxel</string>
+  <string>muxal</string>
   <key>CFBundleIconFile</key>
-  <string>muxel</string>
+  <string>muxal</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>LSMinimumSystemVersion</key>
@@ -25,6 +25,6 @@
   <key>LSApplicationCategoryType</key>
   <string>public.app-category.developer-tools</string>
   <key>NSMicrophoneUsageDescription</key>
-  <string>muxel uses the microphone to transcribe your speech into the focused agent's prompt.</string>
+  <string>muxal uses the microphone to transcribe your speech into the focused agent's prompt.</string>
 </dict>
 </plist>
