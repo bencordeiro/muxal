@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/muxal", "crates/muxal-core", "crates/muxal-store", "crates/muxal-terminal", "crates/muxal-tray"]
 
 [workspace.package]
-version = "0.4.2"
+version = "0.4.3"
 edition = "2024"
 license = "GPL-3.0-only"
 authors = ["ProjectHax LLC"]
