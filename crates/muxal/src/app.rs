@@ -19742,6 +19742,15 @@ impl MuxalApp {
                     .on_click(cx.listener(move |this, _e, _w, cx| this.set_section(section, cx))),
             );
         }
+        // The version number, tucked into the nav column's bottom-left corner.
+        nav = nav.child(div().flex_1()).child(
+            div()
+                .px_2()
+                .pb_1()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(format!("v{}", env!("CARGO_PKG_VERSION"))),
+        );
 
         let content_w = self.settings_content_w(window);
         let content = match current {
