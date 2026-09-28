@@ -1675,6 +1675,16 @@ fn is_claude_program(program: Option<&str>) -> bool {
     )
 }
 
+fn is_pi_program(program: Option<&str>) -> bool {
+    let Some(name) = program.and_then(|program| program.rsplit(['/', '\\']).next()) else {
+        return false;
+    };
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "pi" | "pi.exe" | "pi.cmd"
+    )
+}
+
 /// Whether a Claude agent's saved session transcript is missing from disk (so a
 /// `--resume` would just hang on "No conversation found"). Only Claude's session
 /// path is known, so other agents — or an undeterminable home/cwd — return `false`
@@ -4392,6 +4402,23 @@ impl MuxalApp {
         {
             let _phase = ui_profile::phase("activation", "claude-binding", Some(iid));
             self.adopt_claude_session_binding(iid, cwd);
+        }
+        // pi: adopt the newest session for this project once, so a pane created
+        // before muxal kept session bookkeeping keeps its conversation across
+        // the upgrade instead of starting fresh. pi's `--session-id` then
+        // resumes it; a sibling pane already bound to the id keeps it.
+        if local
+            && is_pi_program(preset.program.as_deref())
+            && let Some(cwd) = cwd.as_deref()
+            && let Some(home) = home_dir()
+            && let Some(found) = muxal_core::pi_latest_session_id(&home, cwd)
+            && !session_id_bound_elsewhere(&self.workspace.instances, iid, &found)
+        {
+            let inst = self.workspace.instance_mut(iid)?;
+            if inst.session_id.is_none() && !inst.session_started {
+                inst.session_id = Some(found);
+                inst.session_started = true;
+            }
         }
         let inst = self.workspace.instance_mut(iid)?;
         let host_minted = preset.session_id_flag.is_some();

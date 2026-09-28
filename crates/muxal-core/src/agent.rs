@@ -627,6 +627,49 @@ pub fn claude_session_path(home: &Path, cwd: &Path, session_id: &str) -> PathBuf
         .join(format!("{session_id}.jsonl"))
 }
 
+/// pi's per-project session directory name for a working directory: the path
+/// with one leading separator stripped and every `/`, `\`, or `:` replaced by
+/// `-`, wrapped in `--…--` — pi's own `safePath`. Pure path-building; the
+/// caller does the filesystem work.
+pub fn pi_session_dir_name(cwd: &Path) -> String {
+    let raw = cwd.to_string_lossy();
+    let trimmed = raw
+        .strip_prefix('/')
+        .or_else(|| raw.strip_prefix('\\'))
+        .unwrap_or(&raw);
+    format!("--{}--", trimmed.replace(['/', '\\', ':'], "-"))
+}
+
+/// The newest session id pi recorded for `cwd`, from
+/// `<home>/.pi/agent/sessions/<dir>/<timestamp>_<id>.jsonl`. Used once to adopt
+/// a conversation started before muxal kept session bookkeeping — pi's
+/// `--session-id` then resumes it. `None` when the project has no pi sessions.
+pub fn pi_latest_session_id(home: &Path, cwd: &Path) -> Option<String> {
+    let dir = home
+        .join(".pi")
+        .join("agent")
+        .join("sessions")
+        .join(pi_session_dir_name(cwd));
+    let mut best: Option<(String, String)> = None;
+    for entry in std::fs::read_dir(dir).ok()? {
+        let Ok(entry) = entry else { continue };
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(stem) = name.strip_suffix(".jsonl") else {
+            continue;
+        };
+        let Some((stamp, id)) = stem.split_once('_') else {
+            continue;
+        };
+        if id.is_empty() {
+            continue;
+        }
+        if best.as_ref().is_none_or(|(s, _)| stamp > s) {
+            best = Some((stamp.to_string(), id.to_string()));
+        }
+    }
+    best.map(|(_, id)| id)
+}
+
 /// Whether a Codex rollout filename under `~/.codex/sessions` carries
 /// `session_id`. Used to decide if a stored id is still resumable before
 /// `codex resume <id>` without opening rollout contents on the activation path.
@@ -1184,6 +1227,39 @@ mod tests {
             session_resume_args(&p, &inst),
             Some(vec!["--session-id".to_string(), "abc".to_string()])
         );
+    }
+
+    /// pi's `safePath` is the path minus one leading separator, with
+    /// `/`, `\`, `:` replaced by `-`, wrapped in `--…--`.
+    #[test]
+    fn pi_session_dir_name_matches_pi_safe_path() {
+        assert_eq!(pi_session_dir_name(Path::new("/tmp")), "--tmp--");
+        assert_eq!(
+            pi_session_dir_name(Path::new("/home/ben/pi/temp")),
+            "--home-ben-pi-temp--"
+        );
+        assert_eq!(
+            pi_session_dir_name(Path::new("/home/u/a:b")),
+            "--home-u-a-b--"
+        );
+    }
+
+    #[test]
+    fn pi_latest_session_id_picks_the_newest_for_the_project() {
+        let home = std::env::temp_dir().join(format!("muxal-pi-adopt-{}", Uuid::new_v4()));
+        let dir = home
+            .join(".pi/agent/sessions")
+            .join(pi_session_dir_name(Path::new("/w/proj")));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("2026-01-01T00-00-00-000Z_old.jsonl"), b"").unwrap();
+        std::fs::write(dir.join("2026-02-01T00-00-00-000Z_new.jsonl"), b"").unwrap();
+        std::fs::write(dir.join("notes.txt"), b"").unwrap();
+        assert_eq!(
+            pi_latest_session_id(&home, Path::new("/w/proj")).as_deref(),
+            Some("new")
+        );
+        assert_eq!(pi_latest_session_id(&home, Path::new("/w/other")), None);
+        std::fs::remove_dir_all(&home).ok();
     }
 
     #[test]

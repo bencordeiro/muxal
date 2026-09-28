@@ -22,8 +22,8 @@ pub use agent::{
     append_agent_instruction, claude_session_path, codex_developer_instructions_override,
     codex_latest_session_id, codex_session_exists, codex_session_id_from_title,
     codex_session_matches_cwd, codex_session_names, codex_terminal_title_override, memory_header,
-    memory_instruction, memory_reference, resolve_launch, resolve_launch_for_session,
-    session_resume_args,
+    memory_instruction, memory_reference, pi_latest_session_id, pi_session_dir_name,
+    resolve_launch, resolve_launch_for_session, session_resume_args,
 };
 pub use appimage::{foreign_muxal_appimage_mounts, own_appimage};
 pub use diff::{SplitRow, split_diff};
@@ -1842,7 +1842,7 @@ impl Default for Settings {
 /// v14: migrated the built-in Grok preset from delayed TypeIn to `--rules`.
 /// v15: repaired Grok presets saved with the generic Claude-only prompt flag.
 /// v16: added the Windows Git Bash preset.
-pub const PRESET_SEED_VERSION: u32 = 16;
+pub const PRESET_SEED_VERSION: u32 = 17;
 
 /// Current version of the Terms of Service / Privacy notice. Bump this when the
 /// terms change so users are asked to accept again on next launch (see
@@ -1988,6 +1988,38 @@ mod settings_tests {
         };
         assert!(!s.seed_builtin_presets());
         assert!(!s.presets.iter().any(|p| p.name == "Ollama"));
+    }
+
+    #[test]
+    fn seed_gives_pi_the_resume_flags_on_old_configs() {
+        // A config saved before pi gained session resume: both flags unset.
+        let mut s = Settings {
+            preset_seed_version: PRESET_SEED_VERSION - 1,
+            presets: vec![AgentPreset {
+                session_id_flag: None,
+                resume_flag: None,
+                ..AgentPreset::pi()
+            }],
+            runners: vec![],
+            ..Settings::default()
+        };
+        assert!(s.seed_builtin_presets());
+        let pi = s.presets.iter().find(|p| p.name == "Pi").unwrap();
+        assert_eq!(pi.session_id_flag.as_deref(), Some("--session-id"));
+        assert_eq!(pi.resume_flag.as_deref(), Some("--session-id"));
+        // An explicit user choice is never overwritten.
+        let mut custom = Settings {
+            preset_seed_version: PRESET_SEED_VERSION - 1,
+            presets: vec![AgentPreset {
+                resume_flag: Some("--continue".to_string()),
+                ..AgentPreset::pi()
+            }],
+            runners: vec![],
+            ..Settings::default()
+        };
+        assert!(custom.seed_builtin_presets());
+        let pi = custom.presets.iter().find(|p| p.name == "Pi").unwrap();
+        assert_eq!(pi.resume_flag.as_deref(), Some("--continue"));
     }
 
     #[test]

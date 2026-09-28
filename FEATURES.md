@@ -127,7 +127,9 @@ feature is added or changed, update the matching entry here in the same change**
     launches with `--session-id` the first time and `--resume` on restart. pi's
     `--session-id` is create-or-resume, so the same flag serves both: muxal passes
     it every launch and pi reopens the conversation by id (recreating it if the
-    session was deleted — a resume can never hang).
+    session was deleted — a resume can never hang). A pi pane from before session
+    bookkeeping adopts its newest existing project session once, so in-flight
+    conversations survive the upgrade.
   - **Agent-minted** (Codex): only `resume_flag` (`resume`) — first launch is bare;
     muxal captures the UUID Codex publishes for that pane, validates it against
     `~/.codex/sessions` before restart, and relaunches as `codex resume <id>`. Multiple Codex
