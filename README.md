@@ -59,6 +59,19 @@ intentionally not packaged — support is being phased out.
 Tracked-but-unfixed issues (currently: terminal glyph spacing on Arch Linux)
 live in [docs/known-issues.md](docs/known-issues.md).
 
+## Under the hood
+
+- **GPU rendering** — the whole UI, terminal panes included, is drawn by
+  **GPUI** (Zed's GPU-accelerated UI framework): Metal on macOS, Vulkan on
+  Linux. Window chrome, terminal cells, the spaceglass backdrop, and every
+  overlay go through the same GPU paint pipeline.
+- **CPU-side terminal emulation** — PTY handling and terminal state live in
+  **`alacritty_terminal`**; muxal feeds its output to the GPUI renderer as text
+  runs. The emulation is CPU code; the presentation is GPU.
+- **Everything else is plain Rust** — the layout tree, agent-status detection,
+  git/worktree and tmux integrations (subprocesses), and persistence have no
+  GPU involvement.
+
 ## Dev / main workflow
 
 muxal supports running an installed **main** and a sandboxed **dev** side by
@@ -91,20 +104,33 @@ side, so you can develop muxal *inside* muxal:
 
 ---
 
-- **Credits** — full credit to the original Muxel developers for building an ADE
-  that invites people to build on it; this repo is my reimagined take on their
-  foundation.
+## Credits
+
+- **ProjectHax LLC** — the original **Muxel** ADE, which muxal is forked from
+  under that project's GPL-3.0 option. Full credit to the original developers
+  for building an ADE that invites people to build on it; muxal is my
+  reimagined take on their foundation, and is not affiliated with or endorsed
+  by them.
+- **[gpui](https://github.com/zed-industries/zed)** (Zed Industries,
+  Apache-2.0) — the GPU-accelerated UI framework everything renders with, and
+  **[alacritty_terminal](https://github.com/alacritty/alacritty)**
+  (Apache-2.0) — the terminal emulation core.
+- **[Lucide](https://lucide.dev)** (ISC) — some icons in `assets/icons/`.
 
 ## License
 
-muxal is **dual-licensed**:
+**muxal is GPL-3.0** — see [LICENSE](LICENSE). It is based on **muxel** by
+**ProjectHax LLC**, used under that project's GPL-3.0 option.
 
-- **Open source** — [GNU GPL-3.0](LICENSE): free to use, modify, and
-  redistribute, provided any version you distribute is also released under
-  GPL-3.0.
-- **Commercial** — a separate license from **ProjectHax LLC** for use that can't
-  comply with the GPL (e.g. embedding muxal in a closed-source product). See
-  [LICENSING.md](LICENSING.md).
+- Everything in this repository — including muxal's changes — is offered under
+  GPL-3.0. If you distribute muxal (binaries or modified source), the
+  corresponding source ships under GPL-3.0 too.
+- Changes from upstream muxel are documented in [FEATURES.md](FEATURES.md) and
+  the git history (GPL-3.0 requires modified versions to be marked as such).
+- Upstream muxel is dual-licensed by its authors: GPL-3.0, or a commercial
+  license from ProjectHax LLC (see [LICENSING.md](LICENSING.md)). That
+  commercial option covers *muxel* only — no commercial or closed-source
+  license for muxal is offered.
 
 By submitting a contribution you agree to the terms in
-[CONTRIBUTING.md](CONTRIBUTING.md), which keep both licenses possible.
+[CONTRIBUTING.md](CONTRIBUTING.md) — contributions are licensed under GPL-3.0.

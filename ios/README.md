@@ -1,5 +1,12 @@
 # muxel — iOS companion app
 
+> **Historical snapshot (kept as-is).** This tree is upstream **muxel**'s iOS
+> companion from its remote/SSH era — Copyright ProjectHax LLC, GPL-3.0 —
+> preserved verbatim, including its names and identifiers (`muxel`,
+> `dev.muxel.*`, ProjectHax's signing team). Desktop **muxal** has no remote
+> protocol and does not build or ship this app; the notes below describe the
+> upstream project, not this fork.
+
 A native SwiftUI app that connects over SSH to a remote host, attaches to the
 **same tmux sessions** muxel desktop uses, lets you view panes/tabs and launch new
 agent instances, and surfaces blocked/finished notifications via on-device polling.

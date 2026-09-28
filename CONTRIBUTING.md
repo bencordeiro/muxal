@@ -4,25 +4,17 @@ Thanks for your interest in muxal!
 
 ## License of contributions (please read)
 
-muxal is **dual-licensed**: GPL-3.0 for open-source use, plus a commercial
-license offered by **ProjectHax LLC** (see [LICENSING.md](LICENSING.md)). For
-that to remain possible, ProjectHax LLC needs the right to ship every
-contribution under **both** licenses.
-
-**By submitting a contribution** — a pull request, patch, or any code, docs, or
-other material — **to this project, you agree that:**
+muxal is **GPL-3.0** (see [LICENSING.md](LICENSING.md)) — there is no second
+license. **By submitting a contribution** — a pull request, patch, or any code,
+docs, or other material — **to this project, you agree that:**
 
 1. You are the author of the contribution (or have permission from the rights
    holder to submit it), and to your knowledge it does not violate any third
    party's rights.
-2. You license your contribution under the **GPL-3.0**, and you additionally
-   grant ProjectHax LLC a perpetual, worldwide, royalty-free, irrevocable right
-   to **relicense** it under other terms, including ProjectHax LLC's commercial
-   license.
+2. You license your contribution under the **GPL-3.0**, the same license as the
+   rest of the project, so it can be distributed together with muxal.
 
-This inbound grant is what lets muxal stay open under the GPL while ProjectHax
-LLC can also offer a commercial license. If you can't agree to it, please don't
-submit a contribution.
+If you can't agree to that, please don't submit a contribution.
 
 ## Development
 
