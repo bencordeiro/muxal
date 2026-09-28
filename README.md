@@ -13,11 +13,9 @@ tmux keybindings required.
 
 See [FEATURES.md](FEATURES.md) for the full feature catalogue, and
 [docs/dev-main-workflow.md](docs/dev-main-workflow.md) for how this repo
-develops itself: an installed "main" you drive daily, a sandboxed "dev" you
-test uncommitted work in, and one command (`scripts/promote.sh`) to push dev
-over main.
+develops itself (installed main + sandboxed dev).
 
-![muxal running three pi agents in tiled panes under the single merged top bar](docs/img1.png)
+![muxal with a shell and a pi agent in tiled panes under the single merged top bar, with the project sidebar and agent statuses](docs/img2.png)
 
 ---
 
@@ -95,9 +93,9 @@ side, so you can develop muxal *inside* muxal:
 
 | Script | Purpose |
 | --- | --- |
-| `scripts/dev.sh` | isolated dev instance (sandboxed config/data) |
-| `scripts/install.sh` | one-time main install: binary + launcher entry |
-| `scripts/promote.sh` | push the current dev tree over the installed main |
+| `scripts/dev.sh` | sandboxed dev instance |
+| `scripts/install.sh` | one-time main install (binary + launcher) |
+| `scripts/promote.sh` | push dev tree over installed main |
 | `scripts/install-desktop.sh` | launcher icon + `.desktop` entry only (used by `install.sh`; `MUXAL_EXEC` overrides the Exec path) |
 | `scripts/sign-macos.sh` | macOS signing / notarization |
 | `scripts/translate.py` | i18n string extraction / translation helper |
@@ -106,31 +104,23 @@ side, so you can develop muxal *inside* muxal:
 
 ## Credits
 
-- **ProjectHax LLC** — the original **Muxel** ADE, which muxal is forked from
-  under that project's GPL-3.0 option. Full credit to the original developers
-  for building an ADE that invites people to build on it; muxal is my
-  reimagined take on their foundation, and is not affiliated with or endorsed
-  by them.
+- **ProjectHax LLC** — the original **Muxel** ADE this fork is built on. Full
+  credit to the original developers for an ADE that invites people to build on
+  it; muxal is my reimagined take on their foundation.
 - **[gpui](https://github.com/zed-industries/zed)** (Zed Industries,
-  Apache-2.0) — the GPU-accelerated UI framework everything renders with, and
+  Apache-2.0) — the GPU-accelerated UI framework; and
   **[alacritty_terminal](https://github.com/alacritty/alacritty)**
   (Apache-2.0) — the terminal emulation core.
 - **[Lucide](https://lucide.dev)** (ISC) — some icons in `assets/icons/`.
 
 ## License
 
-**muxal is GPL-3.0** — see [LICENSE](LICENSE). It is based on **muxel** by
-**ProjectHax LLC**, used under that project's GPL-3.0 option.
+**muxal is GPL-3.0** ([LICENSE](LICENSE)) — based on **muxel** by **ProjectHax
+LLC**, used under that project's GPL-3.0 option (no affiliation or endorsement
+implied). Everything here, including muxal's changes, ships under GPL-3.0 with
+its source; changes from upstream are documented in [FEATURES.md](FEATURES.md)
+and the git history. Contributions are licensed the same way — see
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
-- Everything in this repository — including muxal's changes — is offered under
-  GPL-3.0. If you distribute muxal (binaries or modified source), the
-  corresponding source ships under GPL-3.0 too.
-- Changes from upstream muxel are documented in [FEATURES.md](FEATURES.md) and
-  the git history (GPL-3.0 requires modified versions to be marked as such).
-- Upstream muxel is dual-licensed by its authors: GPL-3.0, or a commercial
-  license from ProjectHax LLC (see [LICENSING.md](LICENSING.md)). That
-  commercial option covers *muxel* only — no commercial or closed-source
-  license for muxal is offered.
-
-By submitting a contribution you agree to the terms in
-[CONTRIBUTING.md](CONTRIBUTING.md) — contributions are licensed under GPL-3.0.
+Upstream's commercial license covers *muxel* only and never muxal; details in
+[LICENSING.md](LICENSING.md).
