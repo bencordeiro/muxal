@@ -123,8 +123,11 @@ feature is added or changed, update the matching entry here in the same change**
   Restart retries) and the error lands in the NOTIFICATIONS feed.
 - **Session resume** — resume-capable agents reopen their prior conversation after
   a muxal restart. Two shapes, both configurable per preset:
-  - **Host-minted** (Claude, Grok): `session_id_flag` + `resume_flag` — muxal
-    launches with `--session-id` the first time and `--resume` on restart.
+  - **Host-minted** (Claude, Grok, pi): `session_id_flag` + `resume_flag` — muxal
+    launches with `--session-id` the first time and `--resume` on restart. pi's
+    `--session-id` is create-or-resume, so the same flag serves both: muxal passes
+    it every launch and pi reopens the conversation by id (recreating it if the
+    session was deleted — a resume can never hang).
   - **Agent-minted** (Codex): only `resume_flag` (`resume`) — first launch is bare;
     muxal captures the UUID Codex publishes for that pane, validates it against
     `~/.codex/sessions` before restart, and relaunches as `codex resume <id>`. Multiple Codex

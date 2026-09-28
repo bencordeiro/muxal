@@ -353,8 +353,11 @@ impl AgentPreset {
             working_markers: Vec::new(),
             blocked_markers: Vec::new(),
             startup_delay_ms: 0,
-            session_id_flag: None,
-            resume_flag: None,
+            // pi's `--session-id` is create-or-resume: it starts the project
+            // session if missing and reopens it otherwise, so the same flag
+            // serves first launch and restart — no on-disk probe needed.
+            session_id_flag: Some("--session-id".to_string()),
+            resume_flag: Some("--session-id".to_string()),
         }
     }
 
@@ -585,6 +588,10 @@ pub fn resolve_launch_for_session(instance: &Instance, resuming: bool) -> Resolv
 /// - **Agent-minted** (`session_id_flag` unset, e.g. Codex): first launch returns
 ///   `None` (bare start — the agent creates its own id); later launches return
 ///   `[resume_flag, id]` once the caller has captured the real id.
+///
+/// Some agents use one flag for both shapes: pi's `--session-id` creates the
+/// project session if missing and reopens it otherwise, so both preset fields
+/// hold it and every launch returns `[session_id_flag, id]`.
 ///
 /// Keying off `session_started` rather than probing the agent's on-disk session
 /// avoids a flush race for host-minted agents. When a session was genuinely
@@ -1155,6 +1162,27 @@ mod tests {
         assert_eq!(
             session_resume_args(&g, &inst),
             Some(vec!["--resume".to_string(), "abc".to_string()])
+        );
+    }
+
+    /// pi's `--session-id` creates-or-resumes, so it is both the create and the
+    /// resume flag: every launch passes the same args, and no on-disk probe is
+    /// needed — pi recreates a deleted session instead of hanging on a resume.
+    #[test]
+    fn pi_resumes_through_the_same_flag() {
+        let p = AgentPreset::pi();
+        assert_eq!(p.session_id_flag.as_deref(), Some("--session-id"));
+        assert_eq!(p.resume_flag.as_deref(), Some("--session-id"));
+        let mut inst = instance(&p, None);
+        inst.session_id = Some("abc".to_string());
+        assert_eq!(
+            session_resume_args(&p, &inst),
+            Some(vec!["--session-id".to_string(), "abc".to_string()])
+        );
+        inst.session_started = true;
+        assert_eq!(
+            session_resume_args(&p, &inst),
+            Some(vec!["--session-id".to_string(), "abc".to_string()])
         );
     }
 

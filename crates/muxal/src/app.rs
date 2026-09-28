@@ -4451,15 +4451,11 @@ impl MuxalApp {
         let resume_args = self.session_resume_for(instance_id);
         let inst = self.workspace.instance(instance_id);
         let project = inst.and_then(|i| self.workspace.project(i.project_id));
-        let resuming = inst
-            .and_then(|i| {
-                let preset = i
-                    .preset_id
-                    .and_then(|pid| self.presets.iter().find(|p| p.id == pid))
-                    .or_else(|| self.presets.iter().find(|p| p.name == i.preset))?;
-                Some((preset.resume_flag.as_deref()?, resume_args.as_ref()?))
-            })
-            .is_some_and(|(flag, args)| args.first().is_some_and(|arg| arg == flag));
+        // A launch resumes exactly when it carries session args for a conversation
+        // that was already started. Flag identity can't tell fresh from resumed when
+        // an agent's create and resume flag are the same (pi's `--session-id`),
+        // while `session_started` — maintained by `session_resume_for` — is exact.
+        let resuming = resume_args.is_some() && inst.is_some_and(|i| i.session_started);
         // Build one instruction bundle, then let the preset's injection transport
         // deliver it. CliFlag and Codex are hidden launch-time instructions;
         // TypeIn submits one visible turn only for a new conversation. Codex's
