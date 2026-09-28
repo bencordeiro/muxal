@@ -541,6 +541,11 @@ feature is added or changed, update the matching entry here in the same change**
   Runners, Snippets, Loops, Projects, and Keybindings.
 - **Themes** — ~22 bundled themes with a switcher (Catppuccin, Gruvbox, Tokyo
   Night, Solarized, Ayu, Everforest, and more).
+- **Keyboard-confirmable dialogs** — every warning/confirmation dialog (close
+  tab/pane, quit, pop-out close, delete confirms) takes keyboard focus the
+  moment it opens: **Enter confirms, Escape cancels**, no mouse needed. Focus
+  is taken only on the open transition, so buttons/checkboxes inside a dialog
+  keep their native keyboard behavior.
 - **Sizing** — whole-app zoom plus independent UI, terminal, and code/diff font
   sizes, and an adjustable tab-strip height (Settings → Appearance) for the
   tab/control bar on every pane — raising it scales the strip's contents with

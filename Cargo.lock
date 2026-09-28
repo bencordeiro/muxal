@@ -4632,7 +4632,7 @@ dependencies = [
 
 [[package]]
 name = "muxel"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -4666,7 +4666,7 @@ dependencies = [
 
 [[package]]
 name = "muxel-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "base64",
  "serde",
@@ -4676,7 +4676,7 @@ dependencies = [
 
 [[package]]
 name = "muxel-store"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4689,7 +4689,7 @@ dependencies = [
 
 [[package]]
 name = "muxel-terminal"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -4707,7 +4707,7 @@ dependencies = [
 
 [[package]]
 name = "muxel-tray"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "ksni",
  "log",

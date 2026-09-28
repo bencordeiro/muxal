@@ -2320,6 +2320,13 @@ pub struct MuxelApp {
     pending_browser_redock: Vec<(Uuid, String, RedockAnchor)>,
     /// Whether the "Quit?" confirmation modal is shown (close was intercepted).
     show_quit_confirm: bool,
+    /// Focus handle confirmation dialogs take the moment they open, so Enter
+    /// confirms and Escape cancels without reaching for the mouse.
+    dialog_focus: FocusHandle,
+    /// Latch: was a main-window dialog open last frame? The focus take fires
+    /// only on the closed→open transition (never steals focus back from a
+    /// checkbox/button the user clicked inside the dialog).
+    main_dlg_was_open: bool,
     /// Quit dialog: also kill muxel's LOCAL tmux sessions (off by default;
     /// reset each time the dialog opens).
     quit_kill_tmux_local: bool,
@@ -2593,6 +2600,10 @@ struct PopoutView {
     view: PaneView,
     iid: Uuid,
     show_close_confirm: bool,
+    /// Focus handle the close-confirm dialog takes on open (Enter/Escape).
+    dlg_focus: FocusHandle,
+    /// Latch for the closed→open transition of the close-confirm dialog.
+    dlg_was_open: bool,
     /// Profiler-only correlation state. Keeping it on the root that owns the
     /// pane prevents a popped-out terminal from affecting main-app lifecycle
     /// bookkeeping or suppressing the first transition after re-dock.
@@ -2656,6 +2667,8 @@ impl PopoutView {
             view,
             iid,
             show_close_confirm: false,
+            dlg_focus: cx.focus_handle(),
+            dlg_was_open: false,
             profile_status,
             profile_window_active,
         }
@@ -2715,6 +2728,9 @@ struct WorkspaceWindow {
     display_uuid: Uuid,
     focus_handle: FocusHandle,
     bounds_save_task: Option<Task<()>>,
+    /// Latch for the closed→open transition of this window's confirm dialog
+    /// (see MuxelApp::dialog_focus).
+    dlg_was_open: bool,
 }
 
 impl WorkspaceWindow {
@@ -2796,6 +2812,7 @@ impl WorkspaceWindow {
             pid,
             display_uuid,
             focus_handle: cx.focus_handle(),
+            dlg_was_open: false,
             bounds_save_task: None,
         }
     }
@@ -2807,6 +2824,14 @@ impl Render for WorkspaceWindow {
         let root = if let Some(app) = self.app.upgrade() {
             let pid = self.pid;
             let focus = self.focus_handle.clone();
+            // Take keyboard focus for the confirm dialog on open, so Enter /
+            // Escape work in project windows too.
+            let dlg = app.read(cx).confirm_window_pid() == Some(pid);
+            if dlg && !self.dlg_was_open {
+                let f = app.read(cx).dialog_focus.clone();
+                cx.defer_in(window, move |_, window, cx| window.focus(&f, cx));
+            }
+            self.dlg_was_open = dlg;
             app.update(cx, |app, cx| {
                 app.render_secondary_content(pid, &focus, window, cx)
             })
@@ -3039,9 +3064,16 @@ impl DevLogEntry {
 }
 
 impl Render for PopoutView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let _render = ui_profile::watch_render_build(ui_profile::RenderView::Popout);
         let title = self.title(cx);
+        // Take keyboard focus for the close-confirm dialog on open.
+        let dlg_open = self.show_close_confirm;
+        if dlg_open && !self.dlg_was_open {
+            let f = self.dlg_focus.clone();
+            cx.defer_in(window, move |_, window, cx| window.focus(&f, cx));
+        }
+        self.dlg_was_open = dlg_open;
         // A native webview child draws above all gpui content, so it has to go
         // away while the close confirmation sits on top of it.
         if let PaneView::Browser(v) = &self.view {
@@ -3153,6 +3185,20 @@ impl Render for PopoutView {
                             .rounded(cx.theme().radius_lg)
                             .shadow_lg()
                             .on_mouse_down(MouseButton::Left, |_ev, _w, cx| cx.stop_propagation())
+                            .track_focus(&self.dlg_focus)
+                            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                                if !this.dlg_focus.is_focused(window) {
+                                    return;
+                                }
+                                match ev.keystroke.key.as_str() {
+                                    "enter" => window.remove_window(),
+                                    "escape" => {
+                                        this.show_close_confirm = false;
+                                        cx.notify();
+                                    }
+                                    _ => {}
+                                }
+                            }))
                             .child(
                                 div()
                                     .text_lg()
@@ -4119,6 +4165,8 @@ impl MuxelApp {
             pending_editor_redock: Vec::new(),
             pending_browser_redock: Vec::new(),
             show_quit_confirm: false,
+            dialog_focus: cx.focus_handle(),
+            main_dlg_was_open: false,
             quit_kill_tmux_local: false,
             show_keys: false,
             term_search: None,
@@ -18822,6 +18870,19 @@ impl MuxelApp {
                     .rounded(cx.theme().radius_lg)
                     .shadow_lg()
                     .on_mouse_down(MouseButton::Left, |_ev, _w, cx| cx.stop_propagation())
+                    .track_focus(&self.dialog_focus)
+                    .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                        // Only while the dialog itself holds focus — a button or
+                        // checkbox focused inside keeps its native Enter behavior.
+                        if !this.dialog_focus.is_focused(window) {
+                            return;
+                        }
+                        match ev.keystroke.key.as_str() {
+                            "enter" => this.run_confirm(window, cx),
+                            "escape" => this.cancel_confirm(cx),
+                            _ => {}
+                        }
+                    }))
                     .child(div().text_lg().font_semibold().child(title))
                     .child(
                         div()
@@ -19021,6 +19082,24 @@ impl MuxelApp {
                     .rounded(cx.theme().radius_lg)
                     .shadow_lg()
                     .on_mouse_down(MouseButton::Left, |_ev, _w, cx| cx.stop_propagation())
+                    .track_focus(&self.dialog_focus)
+                    .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                        if !this.dialog_focus.is_focused(window) {
+                            return;
+                        }
+                        match ev.keystroke.key.as_str() {
+                            "enter" => {
+                                this.kill_checked_tmux_sessions();
+                                this.confirm_quit = true;
+                                cx.quit();
+                            }
+                            "escape" => {
+                                this.show_quit_confirm = false;
+                                cx.notify();
+                            }
+                            _ => {}
+                        }
+                    }))
                     .child(div().text_lg().font_semibold().child(t("Quit muxel?")))
                     .child(
                         div()
@@ -21076,6 +21155,15 @@ impl Render for MuxelApp {
         // Native browser webviews draw above all gpui content in their bounds —
         // keep them shown/hidden in lockstep with what this frame displays.
         self.sync_browser_visibility(cx);
+        // Confirmation dialogs take keyboard focus the moment they open so
+        // Enter confirms / Escape cancels from the keyboard (v0.4.0 feature).
+        let dlg_open = self.show_quit_confirm
+            || (self.confirm.is_some() && self.confirm_window_pid().is_none());
+        if dlg_open && !self.main_dlg_was_open {
+            let f = self.dialog_focus.clone();
+            cx.defer_in(window, move |_, window, cx| window.focus(&f, cx));
+        }
+        self.main_dlg_was_open = dlg_open;
         // Cache the settings pane width so deep helpers can size wrapping labels
         // absolutely (their multi-line height is otherwise mis-measured).
         if self.show_settings {

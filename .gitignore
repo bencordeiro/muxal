@@ -38,3 +38,4 @@
 # Python bytecode (scripts/)
 __pycache__/
 .muxel/
+issues1.txt
