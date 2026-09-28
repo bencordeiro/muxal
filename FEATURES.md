@@ -584,6 +584,12 @@ feature is added or changed, update the matching entry here in the same change**
   and icons step up through size classes. The project sidebar reads one notch
   larger than the rest of the chrome (rows, headers, and status badges +2px)
   for legibility.
+- **Ambience tint** — a slider in Settings → Appearance (cool −50 … +50 warm)
+  casts the whole UI — chrome, panes, and terminal colors — toward warm or cool,
+  like a monitor color filter, live as you drag, and it persists across
+  restarts. The drift is capped at 15%, so text contrast and semantic colors
+  (red = error, ANSI hues) stay intact; at 0 the theme is exactly as authored.
+  Paint-level only — identical on every platform, no OS window transparency.
 - **Keybindings** — configurable shortcuts with a rebind UI, a cheat-sheet overlay
   (`Ctrl+Shift+/`), `Alt+1–9` to jump to a pane's Nth tab, `Ctrl+1–9` to switch to
   the Nth project, `Ctrl+Alt+1–9` to open a new pane running the Nth agent preset,

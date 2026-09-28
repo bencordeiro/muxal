@@ -12,19 +12,18 @@
         "accent.foreground": "#FFFFCE",
         "background": "#000000",
         "border": "#252525",
-        "danger.background": "#593002",
+        "danger.background": "#B93F48",
         "foreground": "#FFFFCE",
         "input.border": "#252525",
-        "list.active.background": "#72020222",
-        "list.active.border": "#720202",
+        "list.active.background": "#72252A55",
+        "list.active.border": "#D95761",
         "list.even.background": "#090909",
         "list.hover.background": "#111111",
         "muted.background": "#20202099",
         "muted.foreground": "#828282",
-        "panel.background": "#1e1e1e",
         "popover.background": "#090909",
         "popover.foreground": "#FFFFCE",
-        "primary.background": "#720202",
+        "primary.background": "#B93F48",
         "primary.foreground": "#FFFFCE",
         "scrollbar.background": "#1e1e1e00",
         "scrollbar.thumb.background": "#3e3e3e",
@@ -36,9 +35,9 @@
         "title_bar.background": "#0e0e0e",
         "table.background": "#1e1e1e00",
         "table.hover.background": "#1E1E1E",
-        "ring": "#570101",
-        "base.red": "#723202",
-        "base.red.light": "#c97636",
+        "ring": "#ED6970",
+        "base.red": "#E1656C",
+        "base.red.light": "#FF969A",
         "base.green": "#027225",
         "base.green.light": "#39c936",
         "base.yellow": "#726302",
@@ -48,7 +47,16 @@
         "base.magenta": "#3a286c",
         "base.magenta.light": "#58197a",
         "base.cyan": "#027272",
-        "base.cyan.light": "#36c9c9"
+        "base.cyan.light": "#36c9c9",
+        "primary.hover.background": "#CD5058",
+        "primary.active.background": "#A9333D",
+        "caret": "#FF8785",
+        "tab.active.foreground": "#FFAAAA",
+        "danger.foreground": "#FFFFCE",
+        "link": "#F58D83",
+        "link.hover": "#FFB0A1",
+        "link.active": "#ED6970",
+        "sidebar.background": "#1e1e1e"
       },
       "highlight": {
         "editor.foreground": "#FFFFCE",
@@ -83,7 +91,7 @@
             "color": "#fd9f4d"
           },
           "keyword": {
-            "color": "#cb4a05"
+            "color": "#E1656C"
           },
           "link_text": {
             "color": "#cda074",

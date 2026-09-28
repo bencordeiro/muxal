@@ -8,6 +8,8 @@ use gpui::{Hsla, Rgba};
 /// A terminal color palette: default fg/bg/cursor + the 16 ANSI colors.
 #[derive(Clone, Debug)]
 pub struct TerminalPalette {
+    /// Render the built-in space scene beneath a tinted glass surface.
+    pub spaceglass: bool,
     pub background: u32,
     pub foreground: u32,
     pub cursor: u32,
@@ -21,6 +23,7 @@ impl Default for TerminalPalette {
     fn default() -> Self {
         // A modern dark palette (Catppuccin Mocha-ish).
         Self {
+            spaceglass: false,
             background: 0x1e1e2e,
             foreground: 0xcdd6f4,
             cursor: 0xf5e0dc,

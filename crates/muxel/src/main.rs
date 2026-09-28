@@ -312,6 +312,7 @@ fn main() {
             i18n::set_language(&i18n::detect_language(&settings));
             cx.set_global(theme::UiScale(settings.zoom));
             cx.set_global(theme::UiFontSize(settings.ui_font_size));
+            theme::set_ambience(settings.ambience, cx);
             theme::apply_initial_theme(&settings.theme, cx);
             app::install_keybindings(&settings, cx);
 

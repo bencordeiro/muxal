@@ -3918,6 +3918,16 @@ impl MuxelApp {
             .unwrap_or(0);
         let available_programs = installed_programs(&presets);
         let settings_ui = SettingsUi::new(window, cx);
+        cx.subscribe_in(
+            &settings_ui.ambience_slider,
+            window,
+            |this, _slider, ev: &gpui_component::slider::SliderEvent, _window, cx| {
+                if let gpui_component::slider::SliderEvent::Change(v) = ev {
+                    this.apply_ambience(v.start(), cx);
+                }
+            },
+        )
+        .detach();
         let rename_input = cx.new(|cx| InputState::new(window, cx));
         let dispose_commit_input = cx.new(|cx| {
             InputState::new(window, cx).placeholder(t("Commit message (default: worktree name)"))
@@ -17307,6 +17317,7 @@ impl MuxelApp {
             // Re-apply the live visual state that editing may have changed.
             let zoom = self.settings.zoom;
             let ui_font = self.settings.ui_font_size;
+            theme::set_ambience(self.settings.ambience, cx);
             theme::apply_initial_theme(&self.theme.clone(), cx);
             theme::set_ui_font_size(ui_font, cx);
             theme::set_ui_scale(zoom, cx);
@@ -17327,6 +17338,10 @@ impl MuxelApp {
         self.settings_ui
             .editor_font_family
             .update(cx, |s, cx| s.set_value(ed_fam, window, cx));
+        let ambience = f32::from(self.settings.ambience);
+        self.settings_ui
+            .ambience_slider
+            .update(cx, |s, cx| s.set_value(ambience, window, cx));
     }
 
     /// Re-derive terminal font config from settings and push it to all panes.
@@ -18218,6 +18233,25 @@ impl MuxelApp {
         let len = instances.len() as isize;
         let next = (((cur as isize + delta) % len + len) % len) as usize;
         self.focus_instance(instances[next], window, cx);
+    }
+
+    /// Apply + persist the ambience cast (settings slider: cool <-> warm).
+    fn apply_ambience(&mut self, cast: f32, cx: &mut Context<Self>) {
+        let cast = cast
+            .clamp(
+                -f32::from(muxel_core::ambience::AMBIENCE_MAX),
+                f32::from(muxel_core::ambience::AMBIENCE_MAX),
+            )
+            .round() as i8;
+        if self.settings.ambience == cast {
+            return;
+        }
+        self.settings.ambience = cast;
+        theme::set_ambience(cast, cx);
+        theme::apply_theme(&self.theme.clone(), cx);
+        self.refresh_terminal_palettes(cx);
+        self.persist_settings();
+        cx.notify();
     }
 
     fn adjust_zoom(&mut self, delta: f32, cx: &mut Context<Self>) {
@@ -19846,6 +19880,30 @@ impl MuxelApp {
                             .on_click(cx.listener(|this, _e, _w, cx| this.adjust_zoom(0.1, cx))),
                     ),
             )
+            .child(self.settings_label(&t("Ambience — a cool/warm tint over the whole app"), cx))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .w(rems(12.0))
+                            .child(gpui_component::slider::Slider::new(
+                                &self.settings_ui.ambience_slider,
+                            )),
+                    )
+                    .child(div().w(rems(7.0)).text_center().child({
+                        let a = self.settings.ambience;
+                        if a > 0 {
+                            format!("+{a} warm")
+                        } else if a < 0 {
+                            format!("{a} cool")
+                        } else {
+                            "neutral".to_string()
+                        }
+                    })),
+            )
             .child(self.settings_label(&t("Terminal font size — independent of UI zoom"), cx))
             .child(
                 div()
@@ -21467,6 +21525,14 @@ impl Render for MuxelApp {
             .text_color(cx.theme().foreground);
         let root = self.attach_workspace_actions(root, cx);
         let root = root
+            .children(crate::theme::is_spaceglass(cx).then(|| {
+                canvas(
+                    |_, _, _| (),
+                    |bounds, _, window, _| muxel_terminal::paint_spaceglass(bounds, window),
+                )
+                .absolute()
+                .size_full()
+            }))
             .child(self.render_titlebar(active_name, sidebar_width_px, cx))
             .child(div().flex_1().min_h_0().flex().child(outer))
             .children(

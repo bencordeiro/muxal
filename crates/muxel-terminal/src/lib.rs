@@ -18,6 +18,7 @@ mod present_flag;
 mod profile;
 mod search;
 mod session;
+mod spaceglass;
 mod view;
 pub use font::{fallback_families, resolve_mono_family};
 
@@ -26,6 +27,7 @@ pub use links::{FileLinkTarget, file_target_from_uri, file_uri, path_from_file_u
 pub use present_flag::{mark_present_needed, take_present_needed};
 pub use profile::startup_event;
 pub use session::{CommandSpec, PtyChunk, TerminalSession};
+pub use spaceglass::paint_spaceglass;
 pub use view::{
     AgentStatus, OpenLink, OpenLinkBackground, TerminalFocusObserver, TerminalFocusProfile,
     TerminalLaunch, TerminalMouseMode, TerminalNotifyCause, TerminalView, clean_agent_title,

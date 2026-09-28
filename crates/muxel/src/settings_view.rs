@@ -165,6 +165,8 @@ pub struct SettingsUi {
 
     // Appearance.
     pub font_family: Entity<InputState>,
+    /// Ambience (cool/warm tint) slider.
+    pub ambience_slider: Entity<gpui_component::slider::SliderState>,
 
     // Editor.
     pub editor_font_family: Entity<InputState>,
@@ -255,6 +257,12 @@ impl SettingsUi {
                 let detected = muxel_terminal::resolve_mono_family(cx.text_system(), "");
                 cx.new(|cx| InputState::new(window, cx).placeholder(detected))
             },
+            ambience_slider: cx.new(|_| {
+                gpui_component::slider::SliderState::new()
+                    .min(-f32::from(muxel_core::ambience::AMBIENCE_MAX))
+                    .max(f32::from(muxel_core::ambience::AMBIENCE_MAX))
+                    .step(1.0)
+            }),
             editor_font_family: cx
                 .new(|cx| InputState::new(window, cx).placeholder(t("theme monospace"))),
             keybinds: DEFAULT_KEYBINDINGS

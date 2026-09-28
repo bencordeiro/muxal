@@ -3,6 +3,7 @@
 //! unit-tested so the GPUI app and persistence layer can build on it.
 
 mod agent;
+pub mod ambience;
 mod appimage;
 pub mod autopilot;
 pub mod diff;
@@ -1518,6 +1519,10 @@ pub struct Settings {
     /// Theme mode override: "dark" | "light" | "" (use the theme's own mode).
     #[serde(default)]
     pub theme_mode: String,
+    /// Warm/cool ambience cast (-50 cool .. +50 warm; 0 = theme as authored).
+    /// Pure color tint over the whole UI; no OS window transparency involved.
+    #[serde(default)]
+    pub ambience: i8,
     /// UI language override (BCP-47, e.g. "fr", "zh-CN"). None/empty = auto-detect
     /// from the OS locale at startup.
     #[serde(default)]
@@ -1797,6 +1802,7 @@ impl Default for Settings {
             presets: AgentPreset::defaults(),
             theme: String::new(),
             theme_mode: String::new(),
+            ambience: 0,
             language: None,
             font_family: String::new(),
             font_size: 14.0,

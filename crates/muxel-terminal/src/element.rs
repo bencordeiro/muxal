@@ -225,7 +225,11 @@ impl Element for TerminalElement {
             window.request_animation_frame();
         }
 
-        window.paint_quad(fill(bounds, self.palette.background_hsla()));
+        if self.palette.spaceglass {
+            crate::paint_spaceglass(bounds, window);
+        } else {
+            window.paint_quad(fill(bounds, self.palette.background_hsla()));
+        }
 
         let origin = bounds.origin;
         let palette = self.palette.clone();
