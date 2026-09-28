@@ -24,7 +24,7 @@ const MACOS_GUI_PATH_DIRS: &[&str] = &[
 ];
 
 /// Per-user bin dirs (resolved against `$HOME`) added for the same reason on macOS.
-const MACOS_USER_SUBDIRS: &[&str] = &[".local/bin", "bin", ".cargo/bin"];
+const MACOS_USER_SUBDIRS: &[&str] = &[".local/bin", "bin", ".cargo/bin", ".local/share/mise/shims"];
 
 /// Fixed system dirs a Linux GUI/AppImage launch may drop: the usual
 /// `/usr/local`, Linuxbrew, and snap's bin.
@@ -46,6 +46,7 @@ const LINUX_USER_SUBDIRS: &[&str] = &[
     ".bun/bin",
     ".deno/bin",
     ".npm-global/bin",
+    ".local/share/mise/shims",
 ];
 
 /// Returns a `PATH` with the standard macOS GUI-launch dirs prepended, or `None`
@@ -204,7 +205,8 @@ mod tests {
         assert_eq!(
             out,
             "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:\
-             /Users/x/.local/bin:/Users/x/bin:/Users/x/.cargo/bin:/usr/bin:/bin"
+             /Users/x/.local/bin:/Users/x/bin:/Users/x/.cargo/bin:\
+             /Users/x/.local/share/mise/shims:/usr/bin:/bin"
         );
     }
 
@@ -212,7 +214,8 @@ mod tests {
     fn returns_none_when_all_present() {
         // A terminal launch already has every dir → nothing to do.
         let current = "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:\
-             /Users/x/.local/bin:/Users/x/bin:/Users/x/.cargo/bin:/usr/bin:/bin";
+             /Users/x/.local/bin:/Users/x/bin:/Users/x/.cargo/bin:\
+             /Users/x/.local/share/mise/shims:/usr/bin:/bin";
         assert_eq!(augmented_macos_path(Some(current), Some("/Users/x")), None);
     }
 
@@ -237,6 +240,12 @@ mod tests {
     }
 
     #[test]
+    fn linux_gui_launch_gets_mise_shims_for_managed_agents() {
+        let out = augmented_linux_path(Some("/usr/bin:/bin"), Some("/home/u")).unwrap();
+        assert!(out.contains("/home/u/.local/share/mise/shims:"));
+    }
+
+    #[test]
     fn empty_home_is_treated_as_absent() {
         let out = augmented_macos_path(Some("/usr/bin"), Some("")).unwrap();
         assert!(!out.contains(".local/bin"));
@@ -246,7 +255,7 @@ mod tests {
     fn missing_path_yields_just_the_standard_dirs() {
         let out = augmented_macos_path(None, Some("/Users/x")).unwrap();
         assert!(out.starts_with("/opt/homebrew/bin:"));
-        assert!(out.ends_with("/Users/x/.cargo/bin"));
+        assert!(out.ends_with("/Users/x/.local/share/mise/shims"));
     }
 
     #[test]
@@ -273,7 +282,8 @@ mod tests {
     fn linux_returns_none_when_all_present() {
         let current = "/usr/local/bin:/usr/local/sbin:/home/linuxbrew/.linuxbrew/bin:/snap/bin:\
              /home/x/.local/bin:/home/x/bin:/home/x/.cargo/bin:/home/x/.opencode/bin:\
-             /home/x/.bun/bin:/home/x/.deno/bin:/home/x/.npm-global/bin:/usr/bin";
+             /home/x/.bun/bin:/home/x/.deno/bin:/home/x/.npm-global/bin:\
+             /home/x/.local/share/mise/shims:/usr/bin";
         assert_eq!(augmented_linux_path(Some(current), Some("/home/x")), None);
     }
 

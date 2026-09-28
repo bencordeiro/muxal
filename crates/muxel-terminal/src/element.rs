@@ -102,32 +102,23 @@ impl Element for TerminalElement {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let font_size = self.font_size;
-        // Use a concrete, installed monospace face. The generic "monospace"
-        // family does not resolve in gpui's font database and silently falls
-        // back to a proportional font, which breaks fixed-width cell layout
-        // (glyphs get force-spread to a wrong advance width).
-        #[cfg(target_os = "macos")]
-        let default_family = "Menlo";
-        #[cfg(target_os = "windows")]
-        let default_family = "Consolas";
-        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-        let default_family = "DejaVu Sans Mono";
-        let family: SharedString = if self.font_family.is_empty() {
-            default_family.into()
+        // Resolve a concrete, installed monospace face. A missing family (or
+        // the generic "monospace") does not error in gpui's font database: it
+        // silently falls back to a proportional font, which breaks fixed-width
+        // cell layout (glyphs get force-spread to a wrong advance width). See
+        // crate::font for the installed + fixed-pitch verification.
+        let text_system = window.text_system();
+        let requested: &str = if self.font_family.is_empty() {
+            ""
         } else {
-            self.font_family.clone()
+            self.font_family.as_str()
         };
         let font = Font {
-            family,
+            family: crate::font::resolve_mono_family(text_system, requested),
             features: FontFeatures::disable_ligatures(),
-            fallbacks: Some(FontFallbacks::from_fonts(vec![
-                "DejaVu Sans Mono".into(),
-                "Liberation Mono".into(),
-                "Noto Sans Mono".into(),
-                "Source Code Pro".into(),
-                "Menlo".into(),
-                "Consolas".into(),
-            ])),
+            fallbacks: Some(FontFallbacks::from_fonts(crate::font::fallback_families(
+                text_system,
+            ))),
             weight: FontWeight::NORMAL,
             style: FontStyle::Normal,
         };
@@ -145,7 +136,6 @@ impl Element for TerminalElement {
             ..font.clone()
         };
 
-        let text_system = window.text_system();
         let font_id = text_system.resolve_font(&font);
         let cell_width = text_system
             .advance(font_id, font_size, 'm')

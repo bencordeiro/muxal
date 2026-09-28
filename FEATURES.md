@@ -104,8 +104,15 @@ feature is added or changed, update the matching entry here in the same change**
   `~/.opencode/bin` (opencode's installer default), Linuxbrew, and friends — so
   agents are detected and spawnable the same as from a terminal. Version managers
   are covered too: nvm's versioned node bin dir (`~/.nvm/versions/node/vX.Y.Z/bin`,
-  newest installed version wins) is discovered at startup, so npm-global agents
-  like `pi` resolve under a GUI launch as well.
+  newest installed version wins) and mise's shim dir (`~/.local/share/mise/shims`)
+  are discovered at startup, so npm-global and mise-managed agents (`pi`,
+  `claude`, `opencode`, …) resolve under a GUI launch as well.
+- **Terminal font auto-resolution** — the terminal never renders with a
+  silently-substituted proportional face: muxel resolves a family that is
+  installed and verifiably fixed-pitch (advance probe), warns when the
+  configured family had to be substituted, and falls back per-glyph to
+  installed mono faces only. Fixes the spaced-out glyph rendering on distros
+  without DejaVu Sans Mono (Arch/Omarchy).
 - **Graceful launch failure** — if an agent can't be spawned, the pane falls back
   to a shell showing the underlying error instead of crashing. If even the
   fallback shell can't start, the pane shows the failure in place (the toolbar

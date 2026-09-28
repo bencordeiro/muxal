@@ -10,6 +10,7 @@
 
 mod colors;
 mod element;
+mod font;
 mod keymap;
 mod links;
 mod listener;
@@ -18,6 +19,7 @@ mod profile;
 mod search;
 mod session;
 mod view;
+pub use font::{fallback_families, resolve_mono_family};
 
 pub use colors::TerminalPalette;
 pub use links::{FileLinkTarget, file_target_from_uri, file_uri, path_from_file_uri};

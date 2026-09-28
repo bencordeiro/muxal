@@ -17362,6 +17362,22 @@ impl MuxelApp {
         }
     }
 
+    /// Inline warning when the configured terminal font family isn't an
+    /// installed monospace face and the resolver had to substitute one.
+    fn font_family_warning(&self, cx: &App) -> Option<SharedString> {
+        let requested = self.settings.font_family.trim();
+        if requested.is_empty() {
+            return None;
+        }
+        let resolved = muxel_terminal::resolve_mono_family(cx.text_system(), requested);
+        (resolved.as_ref() != requested).then(|| {
+            SharedString::from(tf(
+                "\"{requested}\" is not an installed monospace font — terminals will use \"{resolved}\"",
+                &[("requested", requested), ("resolved", resolved.as_ref())],
+            ))
+        })
+    }
+
     fn apply_font_family(&mut self, cx: &mut Context<Self>) {
         self.settings.font_family = self.settings_ui.font_family.read(cx).value().to_string();
         self.refresh_terminal_config(cx);
@@ -19866,6 +19882,10 @@ impl MuxelApp {
                             .label(t("Apply"))
                             .on_click(cx.listener(|this, _e, _w, cx| this.apply_font_family(cx))),
                     ),
+            )
+            .children(
+                self.font_family_warning(cx)
+                    .map(|w| self.settings_label(&w, cx)),
             )
             .child(self.settings_label(&t("Pane border"), cx))
             .child(

@@ -249,8 +249,12 @@ impl SettingsUi {
             l_minute: cx.new(|cx| InputState::new(window, cx).placeholder("00")),
             selected_project: None,
             proj_name: cx.new(|cx| InputState::new(window, cx).placeholder(t("Project name"))),
-            font_family: cx
-                .new(|cx| InputState::new(window, cx).placeholder(t("DejaVu Sans Mono"))),
+            font_family: {
+                // Show the *detected* installed default, not a hardcoded family
+                // that may not exist on this machine.
+                let detected = muxel_terminal::resolve_mono_family(cx.text_system(), "");
+                cx.new(|cx| InputState::new(window, cx).placeholder(detected))
+            },
             editor_font_family: cx
                 .new(|cx| InputState::new(window, cx).placeholder(t("theme monospace"))),
             keybinds: DEFAULT_KEYBINDINGS

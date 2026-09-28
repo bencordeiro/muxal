@@ -1,31 +1,21 @@
 # Known issues
 
-Tracked-but-unfixed problems. Pick these up when it makes sense; remove an
-entry once it's fixed and released.
+Tracked problems and their state. Remove an entry once it's fixed, released,
+and verified.
 
-## Terminal glyph spacing / malformed rendering on Arch Linux
+## Terminal glyph spacing / malformed rendering on Arch Linux — FIXED in v0.4.0
 
-- **Status:** open — noted, deliberately not fixed yet (noted during the
-  v0.3.0 release).
-- **Report:** on Arch Linux the embedded terminal panes show weird letter
-  spacing and malformed-looking rendering. Everything else in the app works
-  normally there.
-- **Symptoms:** incorrect glyph advance / cell geometry in terminal panes;
-  output can look misaligned or broken even though the underlying PTY session
-  is fine.
-- **Suspected area (undiagnosed):** terminal font metrics / fontconfig
-  resolution on Arch (default monospace font or fallback chain differing from
-  the Pop!_OS dev machine), or the GPUI terminal renderer's glyph-advance
-  math. No root-cause work done yet.
-- **Not reproduced:** on the primary dev machine (Pop!_OS) the same builds
-  render correctly.
-- **Open questions to answer when picking this up:**
-  - Which package format was used on Arch (AppImage / .tar.gz / source build)?
-  - Which terminal font was configured / what does fontconfig resolve
-    `monospace` to on that machine?
-  - Which WM/compositor (X11 or Wayland)?
-  - Does changing Settings → terminal font family change the malformed look?
-- **First steps when fixing:** compare `fc-match monospace` output Arch vs
-  Pop!_OS; log the resolved terminal font family + size at pane spawn; capture
-  a screenshot pair; check the terminal element's cell-width computation
-  against the font's measured advance.
+- **Status:** fixed — the field fix from the Arch/Omarchy incident report is
+  ported into this repo (`crates/muxel-terminal/src/font.rs`), so release
+  builds carry it and Arch users never patch their own tree.
+- **Root cause:** gpui's `resolve_font` silently substitutes a proportional UI
+  face when the requested family (old hardcoded default: DejaVu Sans Mono)
+  isn't installed; the terminal then force-spreads every glyph to that face's
+  `'m'` advance. Distro images without DejaVu (Arch/Omarchy ship JetBrainsMono
+  Nerd Font) hit it.
+- **Fix:** the terminal resolves a family that is installed *and* verifiably
+  fixed-pitch (advance-width probe), logs a warning when it substitutes, and
+  uses installed mono faces only as per-glyph fallbacks. gpui-component's
+  global mono family is re-pointed the same way on every theme apply, and
+  Settings shows the detected default plus an inline substitution warning.
+- **Original report:** `issues1.txt` (local, untracked) §4.

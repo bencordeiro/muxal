@@ -101,6 +101,7 @@ pub fn apply_initial_theme(name: &str, cx: &mut App) {
     };
     Theme::global_mut(cx).apply_config(&config);
     apply_scale(cx);
+    apply_mono_font(cx);
 }
 
 /// Apply a theme by name at runtime and refresh open windows.
@@ -109,8 +110,18 @@ pub fn apply_theme(name: &str, cx: &mut App) {
     if let Some(config) = config {
         Theme::global_mut(cx).apply_config(&config);
         apply_scale(cx);
+        apply_mono_font(cx);
         cx.refresh_windows();
     }
+}
+
+/// Re-point gpui-component's global monospace family at an installed,
+/// verifiably fixed-pitch face. gpui silently substitutes a proportional UI
+/// face for families that aren't installed (the Arch/Omarchy spaced-text bug),
+/// which would otherwise leak into code/diff views.
+pub fn apply_mono_font(cx: &mut App) {
+    let resolved = muxel_terminal::resolve_mono_family(cx.text_system(), "");
+    Theme::global_mut(cx).mono_font_family = resolved;
 }
 
 fn hsla_to_u32(c: Hsla) -> u32 {
