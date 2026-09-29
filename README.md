@@ -35,6 +35,23 @@ develops itself (installed main + sandboxed dev).
   fontconfig/freetype, and D-Bus (desktop notifications + tray). `git` and
   `tmux` are optional integrations; each agent CLI is installed separately.
 
+## Update
+
+- **In the app** — the update icon beside the settings gear checks GitHub on
+  click and offers the new release in a dialog. Nothing is downloaded silently:
+  the app only ever learns the release's name.
+- **From a terminal** — one script installs *and* updates, verifying the
+  release checksums and swapping atomically (the previous binary is kept as
+  `muxal.bak`):
+
+  ```sh
+  curl -fsSL https://raw.githubusercontent.com/bencordeiro/muxal/master/scripts/get.sh | sh
+  ```
+
+  `--check` reports without changing anything, `--force` allows downgrades,
+  `--system` installs to `/usr/bin`; it picks the right asset for your distro
+  (`.deb` / `.rpm` / `tar.gz` / AppImage via `--appimage` / macOS `.zip`).
+
 ## Releases
 
 Pushing a `v*` tag makes GitHub Actions build every package on native runners
@@ -99,6 +116,8 @@ side, so you can develop muxal *inside* muxal:
 | `scripts/install-desktop.sh` | launcher icon + `.desktop` entry only (used by `install.sh`; `MUXAL_EXEC` overrides the Exec path) |
 | `scripts/sign-macos.sh` | macOS signing / notarization |
 | `scripts/translate.py` | i18n string extraction / translation helper |
+| `scripts/get.sh` | user-facing install/update from GitHub Releases (checksum-verified) |
+| `scripts/test-get.sh` | sandbox tests for `get.sh` (fake release server) |
 
 ---
 

@@ -1690,6 +1690,21 @@ fn is_pi_program(program: Option<&str>) -> bool {
     )
 }
 
+/// Blocking GET of the GitHub latest-release payload; runs on the background
+/// executor. Returns the release tag, or `None` (offline, rate-limited, changed
+/// payload) — the check never fails loudly.
+fn fetch_latest_tag(url: &str) -> Option<String> {
+    let body = ureq::get(url)
+        .header("User-Agent", concat!("muxal/", env!("CARGO_PKG_VERSION")))
+        .header("Accept", "application/vnd.github+json")
+        .call()
+        .ok()?
+        .into_body()
+        .read_to_string()
+        .ok()?;
+    muxal_core::update::latest_release_tag(&body)
+}
+
 /// Whether a Claude agent's saved session transcript is missing from disk (so a
 /// `--resume` would just hang on "No conversation found"). Only Claude's session
 /// path is known, so other agents — or an undeterminable home/cwd — return `false`
@@ -2309,6 +2324,8 @@ pub struct MuxalApp {
     /// render). Lets deep helpers (`check_row`) size wrapping labels absolutely so
     /// their multi-line height is measured correctly. See [`settings_content_w`].
     settings_pane_w: Pixels,
+    /// The "Check for updates" outcome (pure state; see [`muxal_core::update`]).
+    update_check: muxal_core::update::UpdateState,
     /// Settings card offset from centre, set by dragging its title bar.
     settings_offset: Point<Pixels>,
     /// Active settings-resize drag: (start cursor pos, base size).
@@ -2866,6 +2883,8 @@ enum ConfirmAction {
     DeleteRunner(usize),
     DeleteSnippet(usize),
     DeleteLoop(usize),
+    /// Open the GitHub releases page (from the update-available dialog).
+    OpenReleases,
     CloseInstance(Uuid),
     /// Close every other tab in the pane holding this instance (keeps it).
     CloseOtherTabs(Uuid),
@@ -4179,6 +4198,7 @@ impl MuxalApp {
             workspace_name_input,
             settings_size: size(px(780.0), px(620.0)),
             settings_pane_w: px(560.0),
+            update_check: muxal_core::update::UpdateState::Idle,
             settings_offset: point(px(0.0), px(0.0)),
             settings_resize: None,
             settings_move: None,
@@ -11740,6 +11760,9 @@ impl MuxalApp {
             ConfirmAction::DeleteRunner(idx) => self.delete_runner(idx, cx),
             ConfirmAction::DeleteSnippet(idx) => self.delete_snippet(idx, cx),
             ConfirmAction::DeleteLoop(idx) => self.delete_loop(idx, cx),
+            ConfirmAction::OpenReleases => {
+                self.open_link("https://github.com/bencordeiro/muxal/releases", window, cx);
+            }
             // The close hands keyboard focus to the surviving pane itself.
             ConfirmAction::CloseInstance(iid) => self.close_instance(iid, Some(window), cx),
             ConfirmAction::CloseOtherTabs(keep) => {
@@ -12275,6 +12298,67 @@ impl MuxalApp {
         }
         self.persist();
         cx.notify();
+    }
+
+    /// Ask the GitHub releases API whether a newer release exists. Click-only —
+    /// the app never phones home on its own — and the response only names a
+    /// tag: nothing is downloaded. The outcome lands in a confirm dialog
+    /// (update available) or a notification (up to date / failed).
+    /// `MUXAL_LATEST_API` overrides the URL for offline testing.
+    fn check_for_updates(&mut self, cx: &mut Context<Self>) {
+        use muxal_core::update::UpdateState;
+        if self.update_check == UpdateState::Checking {
+            return;
+        }
+        self.update_check = UpdateState::Checking;
+        cx.notify();
+        let url = std::env::var("MUXAL_LATEST_API")
+            .unwrap_or_else(|_| muxal_core::update::LATEST_RELEASE_API.to_string());
+        let current = env!("CARGO_PKG_VERSION").to_string();
+        let request = cx
+            .background_executor()
+            .spawn(async move { fetch_latest_tag(&url) });
+        cx.spawn(async move |this, cx| {
+            let latest = request.await;
+            let state = muxal_core::update::update_state_for(&current, latest.as_deref());
+            this.update(cx, |this, cx| {
+                this.update_check = state.clone();
+                match state {
+                    UpdateState::Available { latest } => {
+                        this.request_confirm(
+                            t("Update available"),
+                            tf(
+                                "Version {latest} is available — you have {current}.",
+                                &[("latest", latest.as_str()), ("current", current.as_str())],
+                            ),
+                            t("Open releases"),
+                            ConfirmAction::OpenReleases,
+                            cx,
+                        );
+                    }
+                    UpdateState::UpToDate => {
+                        this.add_event(
+                            NotifKind::Success,
+                            t("Up to date"),
+                            tf(
+                                "You're running the latest version ({current}).",
+                                &[("current", current.as_str())],
+                            ),
+                        );
+                    }
+                    _ => {
+                        this.add_event(
+                            NotifKind::Error,
+                            t("Couldn't check for updates"),
+                            t("The update check failed — check your connection."),
+                        );
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Focus the next agent that needs attention — blocked panes first (they're
@@ -17393,6 +17477,19 @@ impl MuxalApp {
                                     .on_click(cx.listener(|this, _ev, _window, cx| {
                                         this.toggle_notifications(cx)
                                     })),
+                            ))
+                            .child(nodrag(
+                                Button::new("check-updates")
+                                    .ghost()
+                                    .icon(Icon::empty().path("icons/refresh.svg"))
+                                    .disabled(
+                                        self.update_check
+                                            == muxal_core::update::UpdateState::Checking,
+                                    )
+                                    .tooltip(t("Check for updates"))
+                                    .on_click(
+                                        cx.listener(|this, _ev, _w, cx| this.check_for_updates(cx)),
+                                    ),
                             ))
                             .child(nodrag(
                                 Button::new("settings")

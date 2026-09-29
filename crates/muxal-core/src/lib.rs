@@ -14,6 +14,7 @@ pub mod memory;
 mod pane;
 mod shell;
 pub mod tmux;
+pub mod update;
 pub mod url;
 pub mod worktree;
 

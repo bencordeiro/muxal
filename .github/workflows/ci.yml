@@ -32,6 +32,15 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
+  # Sandbox tests for the user-facing install/update script (scripts/get.sh):
+  # fake release + local server + mktemp HOME; never touches the real system.
+  updater:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: install-script sandbox tests
+        run: scripts/test-get.sh
+
   test:
     strategy:
       fail-fast: false

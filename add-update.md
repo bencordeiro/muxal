@@ -1,8 +1,8 @@
 # Plan: Easy updates (install/update script + Settings check)
 
-Status: **planned, not started** — open questions at the bottom need answers
-before any code. Both features touch *installs* and *the network*, so the test
-story is half the design.
+Status: **shipped** (in-app check + `scripts/get.sh` + `scripts/test-get.sh`
++ `SHA256SUMS.txt` in the release job). The open questions below were answered
+with the documented leans.
 
 ## Guiding principles
 

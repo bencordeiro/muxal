@@ -198,6 +198,14 @@ fn raise_open_file_limit() {
 }
 
 fn main() {
+    // `muxal --version`: print and exit before anything initializes — the
+    // update script asks the installed binary what version it is.
+    if let Some(first) = std::env::args().nth(1)
+        && (first == "--version" || first == "-V")
+    {
+        println!("muxal {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     match session_binding::hook_instance_from_args(
         std::env::args_os().skip(1),
         std::env::var_os(session_binding::MUXAL_INSTANCE_ID_ENV),

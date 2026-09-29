@@ -649,6 +649,12 @@ feature is added or changed, update the matching entry here in the same change**
 
 ## Platform & distribution
 
+- **Easy updates** — an update icon beside the settings gear checks for a new
+  release on click and offers it in a dialog; `scripts/get.sh` installs or
+  updates from a terminal for every channel (`.deb` / `.rpm` / `tar.gz` /
+  AppImage / macOS `.zip`), verifying the release's `SHA256SUMS.txt` and
+  swapping atomically with the previous binary kept as `muxal.bak`.
+
 - **Opt-in focus diagnostics** — the UI profiler correlates GPUI focus-path
   loss with redraw requests and native window ownership. WebView children
   must descend from a registered Muxal window; unrelated WRY apps remain
