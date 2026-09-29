@@ -62,9 +62,6 @@ pub const DEFAULT_KEYBINDINGS: &[(&str, &str, Option<&str>)] = &[
     ("JumpToTab4", "alt-4", None),
     ("JumpToTab5", "alt-5", None),
     ("JumpToTab6", "alt-6", None),
-    ("JumpToTab7", "alt-7", None),
-    ("JumpToTab8", "alt-8", None),
-    ("JumpToTab9", "alt-9", None),
     ("JumpToProject1", "ctrl-1", None),
     ("JumpToProject2", "ctrl-2", None),
     ("JumpToProject3", "ctrl-3", None),
@@ -74,16 +71,14 @@ pub const DEFAULT_KEYBINDINGS: &[(&str, &str, Option<&str>)] = &[
     ("JumpToProject7", "ctrl-7", None),
     ("JumpToProject8", "ctrl-8", None),
     ("JumpToProject9", "ctrl-9", None),
-    // New pane running the Nth agent preset (in the preset-list order).
+    // New pane running the Nth agent preset (in the preset-list order; drag
+    // the list in Settings → Agents to change it).
     ("NewAgent1", "ctrl-alt-1", None),
     ("NewAgent2", "ctrl-alt-2", None),
     ("NewAgent3", "ctrl-alt-3", None),
     ("NewAgent4", "ctrl-alt-4", None),
     ("NewAgent5", "ctrl-alt-5", None),
     ("NewAgent6", "ctrl-alt-6", None),
-    ("NewAgent7", "ctrl-alt-7", None),
-    ("NewAgent8", "ctrl-alt-8", None),
-    ("NewAgent9", "ctrl-alt-9", None),
     // Cycle the pinned projects (top-bar slots), wrapping.
     ("CycleProjects", "alt-p", None),
     ("CycleProjectsPrev", "alt-shift-p", None),

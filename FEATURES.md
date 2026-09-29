@@ -84,6 +84,11 @@ feature is added or changed, update the matching entry here in the same change**
 
 ## Agents
 
+- **Agent preset ordering** — drag presets in Settings → Agents to reorder
+  them. The order is the spawn-hotkey order (`Ctrl+Alt+1`..`6`, rebindable)
+  and the order of the top-bar agent dropdown, and an open editor or the
+  current selection follows its preset while dragging.
+
 - **Built-in agent presets** — Shell, Claude, opencode, Amp (ampcode), Grok
   (x.ai), Hermes, Ollama, **Ollama Code**, Pi, and a **Browser** preset, each with
   its own icon. A preset is either a terminal agent or a **Browser** (opens a

@@ -1360,7 +1360,7 @@ actions!(
     ]
 );
 
-/// Select the Nth tab (1-based) of the active pane. Bound to Alt+1..9.
+/// Select the Nth tab (1-based) of the active pane. Bound to Alt+1..6.
 #[derive(Action, Clone, PartialEq)]
 #[action(namespace = muxal, no_json)]
 struct JumpToTab(usize);
@@ -1371,7 +1371,7 @@ struct JumpToTab(usize);
 struct JumpToProject(usize);
 
 /// Open a new pane running the Nth agent preset (1-based, in the preset list
-/// order). Bound to Ctrl+Alt+1..9.
+/// order). Bound to Ctrl+Alt+1..6.
 #[derive(Action, Clone, PartialEq)]
 #[action(namespace = muxal, no_json)]
 struct NewAgent(usize);
@@ -1408,7 +1408,7 @@ fn keybinding_for(action: &str, keystroke: &str, context: Option<&str>) -> Optio
         "ToggleWorktree" => KeyBinding::new(keystroke, ToggleWorktree, context),
         "ToggleFullScreen" => KeyBinding::new(keystroke, ToggleFullScreen, context),
         "ToggleDevConsole" => KeyBinding::new(keystroke, ToggleDevConsole, context),
-        // NewAgent1..9 — the trailing digit is the 1-based preset index.
+        // NewAgent1..6 — the trailing digit is the 1-based preset index.
         a if a.starts_with("NewAgent") => {
             match a
                 .strip_prefix("NewAgent")
@@ -1418,7 +1418,7 @@ fn keybinding_for(action: &str, keystroke: &str, context: Option<&str>) -> Optio
                 None => return None,
             }
         }
-        // JumpToTab1..9 — the trailing digit is the tab index.
+        // JumpToTab1..6 — the trailing digit is the tab index.
         a if a.starts_with("JumpToTab") => {
             match a
                 .strip_prefix("JumpToTab")
@@ -1834,6 +1834,13 @@ enum RenameOrigin {
 /// Drag payload for reordering projects in the sidebar.
 #[derive(Clone)]
 struct DragProject {
+    from: usize,
+}
+
+/// Drag payload for reordering agent presets (settings → Agents). The list
+/// order is the NewAgent hotkey order and the top-bar agent dropdown order.
+#[derive(Clone)]
+struct DragPreset {
     from: usize,
 }
 
@@ -7701,7 +7708,7 @@ impl MuxalApp {
 
     /// Open a new pane running preset number `n` (1-based, in the preset list
     /// order) beside the active pane — the keyboard counterpart to the toolbar's
-    /// preset picker (bound to Ctrl+Alt+1..9). Out-of-range `n` is ignored.
+    /// preset picker (bound to Ctrl+Alt+1..6). Out-of-range `n` is ignored.
     fn new_agent_preset(&mut self, n: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(idx) = n.checked_sub(1).filter(|i| *i < self.presets.len()) else {
             return;
@@ -12581,6 +12588,35 @@ impl MuxalApp {
         let to = to.min(self.workspace.projects.len());
         self.workspace.projects.insert(to, project);
         self.persist();
+        cx.notify();
+    }
+
+    /// Reorder agent presets by drag (settings → Agents). The order is the
+    /// contract for the NewAgent spawn hotkeys (Ctrl+Alt+1..6) and the top-bar
+    /// agent dropdown, so both follow this list. The dropdown selection and an
+    /// open preset editor keep pointing at the same preset, not the same slot.
+    fn reorder_presets(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
+        let n = self.presets.len();
+        if from >= n || to >= n || from == to {
+            return;
+        }
+        let selected_id = self.presets.get(self.current_preset).map(|p| p.id);
+        let editor_id = self
+            .settings_ui
+            .selected_preset
+            .and_then(|ix| self.presets.get(ix))
+            .map(|p| p.id);
+        let preset = self.presets.remove(from);
+        let to = to.min(self.presets.len());
+        self.presets.insert(to, preset);
+        if let Some(id) = selected_id
+            && let Some(idx) = self.presets.iter().position(|p| p.id == id)
+        {
+            self.current_preset = idx;
+        }
+        self.settings_ui.selected_preset =
+            editor_id.and_then(|id| self.presets.iter().position(|p| p.id == id));
+        self.persist_settings();
         cx.notify();
     }
 
@@ -20461,7 +20497,9 @@ impl MuxalApp {
 
     fn render_settings_agents(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut list = v_flex().w(rems(10.0)).flex_none().gap_1();
+        let drop_hl = cx.theme().sidebar_accent;
         for (idx, p) in self.presets.iter().enumerate() {
+            let pname = p.name.clone();
             let selected = self.settings_ui.selected_preset == Some(idx);
             // Flag agents whose binary isn't installed (hidden from new-agent menus).
             let not_installed = !self.agent_runnable(p);
@@ -20486,6 +20524,16 @@ impl MuxalApp {
                     .on_click(cx.listener(move |this, _e, window, cx| {
                         this.open_preset_editor(idx, window, cx)
                     }))
+                    // Drag to reorder: the list order is the NewAgent hotkey
+                    // order (Ctrl+Alt+1..6) and the top-bar agent dropdown.
+                    .on_drag(DragPreset { from: idx }, move |_, offset, _, cx| {
+                        let label = SharedString::from(pname.clone());
+                        cx.new(move |_| DragGhost { label, offset })
+                    })
+                    .on_drop::<DragPreset>(cx.listener(move |this, d: &DragPreset, _w, cx| {
+                        this.reorder_presets(d.from, idx, cx)
+                    }))
+                    .drag_over::<DragPreset>(move |s, _, _, _| s.bg(drop_hl))
                     .child(icon)
                     .child(div().flex_1().text_sm().child(p.name.clone()))
                     .children(not_installed.then(|| {
