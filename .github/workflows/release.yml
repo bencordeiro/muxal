@@ -339,7 +339,11 @@ jobs:
       - name: Checksums
         run: |
           cd artifacts
-          find . -type f ! -name SHA256SUMS.txt -printf "%P\n" | sort | xargs sha256sum > SHA256SUMS.txt
+          # Bare asset names (the find can descend through upload paths like
+          # target/debian/); get.sh looks these up exactly.
+          find . -type f ! -name SHA256SUMS.txt | sort | while read -r f; do
+            printf '%s  %s\n' "$(sha256sum "$f" | awk '{print $1}')" "$(basename "$f")"
+          done > SHA256SUMS.txt
           cat SHA256SUMS.txt
       - uses: softprops/action-gh-release@v2
         with:
