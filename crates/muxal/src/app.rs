@@ -4436,6 +4436,16 @@ impl MuxalApp {
             let _phase = ui_profile::phase("activation", "claude-binding", Some(iid));
             self.adopt_claude_session_binding(iid, cwd);
         }
+        // pi: an exact binding from the bundled extension (in-pane /new, an
+        // in-TUI resume, a fork) wins over anything saved — the same pre-launch
+        // read Claude uses to close the quit-before-next-tick race.
+        if local
+            && is_pi_program(preset.program.as_deref())
+            && let Some(cwd) = cwd.as_deref()
+        {
+            let _phase = ui_profile::phase("activation", "pi-binding", Some(iid));
+            self.adopt_pi_session_binding(iid, cwd);
+        }
         // pi: adopt the newest session for this project once, so a pane created
         // before muxal kept session bookkeeping keeps its conversation across
         // the upgrade instead of starting fresh. pi's `--session-id` then
@@ -4604,6 +4614,32 @@ impl MuxalApp {
             resolved.env.push((
                 crate::session_binding::MUXAL_INSTANCE_ID_ENV.to_string(),
                 instance_id.to_string(),
+            ));
+        }
+        // pi: load the bundled session-binding extension and point it at this
+        // pane's binding file, so in-pane conversation switches survive a
+        // restart the way Claude's SessionStart hook does.
+        if is_pi_program(agent_program.as_deref())
+            && project.is_some()
+            && let Some(data_dir) = muxal_store::data_dir()
+        {
+            if let Some(ext) = crate::session_binding::pi_binding_extension(&data_dir) {
+                resolved.args.push("--extension".to_string());
+                resolved.args.push(ext);
+            }
+            resolved.env.retain(|(key, _)| {
+                !key.eq_ignore_ascii_case(crate::session_binding::MUXAL_INSTANCE_ID_ENV)
+                    && !key.eq_ignore_ascii_case(crate::session_binding::MUXAL_SESSION_BINDING_ENV)
+            });
+            resolved.env.push((
+                crate::session_binding::MUXAL_INSTANCE_ID_ENV.to_string(),
+                instance_id.to_string(),
+            ));
+            resolved.env.push((
+                crate::session_binding::MUXAL_SESSION_BINDING_ENV.to_string(),
+                crate::session_binding::pi_binding_path(&data_dir, instance_id)
+                    .display()
+                    .to_string(),
             ));
         }
 
@@ -6568,6 +6604,59 @@ impl MuxalApp {
         }
     }
 
+    /// The pi counterpart of [`Self::adopt_claude_session_binding`]: the
+    /// bundled pi extension writes the active session id on every in-pane
+    /// conversation switch (`/new`, an in-TUI resume, a fork), so reopening the
+    /// pane lands on the conversation the user left, not the one it launched
+    /// with.
+    fn adopt_pi_session_binding(&mut self, iid: Uuid, cwd: &std::path::Path) -> bool {
+        let (Some(data_dir), Some(_home)) = (muxal_store::data_dir(), home_dir()) else {
+            return false;
+        };
+        let Some(session_id) =
+            crate::session_binding::pi_session_id_from_binding(&data_dir, iid, &_home, cwd)
+        else {
+            crate::session_binding::clear_pi_binding(&data_dir, iid);
+            return false;
+        };
+        if session_id_bound_elsewhere(&self.workspace.instances, iid, &session_id) {
+            crate::session_binding::clear_pi_binding(&data_dir, iid);
+            return false;
+        }
+        if self
+            .workspace
+            .instance(iid)
+            .and_then(|instance| instance.session_id.as_deref())
+            == Some(session_id.as_str())
+        {
+            crate::session_binding::clear_pi_binding(&data_dir, iid);
+            return false;
+        }
+        let Some(instance) = self.workspace.instance_mut(iid) else {
+            crate::session_binding::clear_pi_binding(&data_dir, iid);
+            return false;
+        };
+        let previous_session_id = instance.session_id.clone();
+        let previous_session_started = instance.session_started;
+        let previous_auto_name = instance.auto_name.clone();
+        instance.session_id = Some(session_id);
+        instance.session_started = true;
+        instance.auto_name = None;
+        if self.try_persist() {
+            crate::session_binding::clear_pi_binding(&data_dir, iid);
+            true
+        } else {
+            let instance = self
+                .workspace
+                .instance_mut(iid)
+                .expect("pi binding owner disappeared during persistence");
+            instance.session_id = previous_session_id;
+            instance.session_started = previous_session_started;
+            instance.auto_name = previous_auto_name;
+            false
+        }
+    }
+
     /// Poll the small per-pane Claude binding records. Usually the hook lands
     /// while Muxal is still open; `session_resume_for` repeats this read before a
     /// later launch to close the quit-before-next-tick race.
@@ -6591,6 +6680,34 @@ impl MuxalApp {
         let mut changed = false;
         for (iid, cwd) in candidates {
             changed |= self.adopt_claude_session_binding(iid, &cwd);
+        }
+        if changed {
+            cx.notify();
+        }
+    }
+
+    /// Poll the per-pane pi binding records — written by the bundled pi
+    /// extension on every in-pane conversation switch.
+    fn sync_pi_session_ids(&mut self, cx: &mut Context<Self>) {
+        let candidates: Vec<(Uuid, PathBuf)> = self
+            .workspace
+            .instances
+            .iter()
+            .filter_map(|instance| {
+                let project = self.workspace.project(instance.project_id)?;
+                if !is_pi_program(instance.program.as_deref()) {
+                    return None;
+                }
+                let cwd = instance
+                    .worktree_path
+                    .clone()
+                    .unwrap_or_else(|| project.root_path.clone());
+                Some((instance.id, cwd))
+            })
+            .collect();
+        let mut changed = false;
+        for (iid, cwd) in candidates {
+            changed |= self.adopt_pi_session_binding(iid, &cwd);
         }
         if changed {
             cx.notify();
@@ -6794,6 +6911,7 @@ impl MuxalApp {
         // Poll independently of the slower remote-project cadence so a normal
         // quit shortly after `/resume` is unlikely to persist the old binding.
         self.sync_claude_session_ids(cx);
+        self.sync_pi_session_ids(cx);
         self.sync_grok_session_ids(cx);
         let focused = self.active_instance;
         // A `--resume` launch has this long to prove its saved session is valid;

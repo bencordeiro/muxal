@@ -12,8 +12,16 @@ use uuid::Uuid;
 const CLAUDE_BINDING_DIR: &str = "provider-session-bindings/claude";
 const CLAUDE_SETTINGS_DIR: &str = "provider-session-bindings/claude/settings";
 const CLAUDE_HOOK_FLAG: &str = "--claude-session-hook";
+const PI_BINDING_DIR: &str = "provider-session-bindings/pi";
+const PI_EXT_DIR: &str = "provider-session-bindings/pi/ext";
 const MAX_HOOK_INPUT_BYTES: u64 = 64 * 1024;
 pub(crate) const MUXAL_INSTANCE_ID_ENV: &str = "MUXAL_INSTANCE_ID";
+/// Per-pane binding file the bundled pi extension writes on session switch.
+pub(crate) const MUXAL_SESSION_BINDING_ENV: &str = "MUXAL_SESSION_BINDING_FILE";
+/// The pi extension muxal loads per pane via `--extension` to track in-pane
+/// conversation switches (/new, resume, forks) the way Claude's SessionStart
+/// hook does.
+const PI_BINDING_EXTENSION: &str = include_str!("../assets/pi/muxal-session-binding.ts");
 
 pub(crate) fn hook_instance_from_args(
     args: impl IntoIterator<Item = OsString>,
@@ -275,9 +283,95 @@ pub(crate) fn clear_claude_binding(data_dir: &Path, instance_id: Uuid) {
     let _ = std::fs::remove_file(claude_binding_path(data_dir, instance_id));
 }
 
+pub(crate) fn pi_binding_path(data_dir: &Path, instance_id: Uuid) -> PathBuf {
+    data_dir
+        .join(PI_BINDING_DIR)
+        .join(format!("{instance_id}.json"))
+}
+
+/// Read + validate a pi binding written by the bundled pi extension: its cwd
+/// must match the pane's and the id must look sane. Deliberately no
+/// session-file existence check — pi materializes session files only once
+/// there is content, so a fresh `/new` session has no file yet and reopening
+/// it (create-or-resume) is exactly the desired behavior.
+pub(crate) fn pi_session_id_from_binding(
+    data_dir: &Path,
+    instance_id: Uuid,
+    _home: &Path,
+    cwd: &Path,
+) -> Option<String> {
+    let raw = std::fs::read(pi_binding_path(data_dir, instance_id)).ok()?;
+    let value: Value = serde_json::from_slice(&raw).ok()?;
+    let session_id = value.get("session_id")?.as_str()?;
+    if session_id.is_empty()
+        || session_id.len() > 128
+        || session_id
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control())
+    {
+        return None;
+    }
+    let wrote_cwd = Path::new(value.get("cwd")?.as_str()?);
+    if !paths_loosely_equal(wrote_cwd, cwd) {
+        return None;
+    }
+    Some(session_id.to_string())
+}
+
+pub(crate) fn clear_pi_binding(data_dir: &Path, instance_id: Uuid) {
+    let _ = std::fs::remove_file(pi_binding_path(data_dir, instance_id));
+}
+
+/// Write out the bundled pi extension (idempotent) and return its path for
+/// pi's `--extension` flag.
+pub(crate) fn pi_binding_extension(data_dir: &Path) -> Option<String> {
+    let dir = data_dir.join(PI_EXT_DIR);
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join("muxal-session-binding.ts");
+    std::fs::write(&path, PI_BINDING_EXTENSION).ok()?;
+    Some(path.display().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pi_binding_round_trip_and_validation() {
+        let dir = temp_dir();
+        let iid = Uuid::new_v4();
+        let cwd = dir.join("project");
+        let home = dir.join("home");
+        // What the bundled pi extension writes. Note: no session file exists —
+        // a fresh `/new` session legitimately has none until it has content.
+        let path = pi_binding_path(&dir, iid);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            serde_json::json!({ "session_id": "abc-123", "cwd": cwd.display().to_string() })
+                .to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            pi_session_id_from_binding(&dir, iid, &home, &cwd).as_deref(),
+            Some("abc-123")
+        );
+        // Another project's cwd must not accept the binding.
+        assert_eq!(
+            pi_session_id_from_binding(&dir, iid, &home, &dir.join("other")),
+            None
+        );
+        // Malformed ids are rejected.
+        std::fs::write(
+            &path,
+            serde_json::json!({ "session_id": "bad id", "cwd": cwd.display().to_string() })
+                .to_string(),
+        )
+        .unwrap();
+        assert_eq!(pi_session_id_from_binding(&dir, iid, &home, &cwd), None);
+        clear_pi_binding(&dir, iid);
+        assert_eq!(pi_session_id_from_binding(&dir, iid, &home, &cwd), None);
+    }
 
     fn temp_dir() -> PathBuf {
         let dir = std::env::temp_dir().join(format!("muxal-claude-binding-{}", Uuid::new_v4()));

@@ -143,7 +143,10 @@ feature is added or changed, update the matching entry here in the same change**
   pane (`/resume`, `/clear`, a fork) without restarting the PTY, and muxal rebinds the
   pane to what's actually on screen instead of the conversation it launched.
   Claude panes learn the switch from a process-local `SessionStart` hook keyed to the
-  pane; Codex panes learn it from a later OSC title. Both are accepted only after the
+  pane; Codex panes learn it from a later OSC title. pi panes learn it from a bundled
+  pi extension (loaded per pane via `--extension`) that reports the active session id
+  on every switch, `/new`, or fork — so a pi pane reopens exactly the conversation
+  you left, even an empty fresh one. Both are accepted only after the
   new UUID's own on-disk session proves it belongs to this pane's directory and that no
   sibling pane already owns it — terminal titles carry no sender identity, so an
   unverified one cannot rebind a pane. If the saved session is gone, the pane
