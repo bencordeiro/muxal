@@ -9,9 +9,9 @@
   <key>CFBundleIdentifier</key>
   <string>io.github.bencordeiro.muxal</string>
   <key>CFBundleVersion</key>
-  <string>0.4.3</string>
+  <string>0.5.0</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.4.3</string>
+  <string>0.5.0</string>
   <key>CFBundleExecutable</key>
   <string>muxal</string>
   <key>CFBundleIconFile</key>
