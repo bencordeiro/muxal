@@ -825,6 +825,11 @@ pub struct Workspace {
     /// monitor leaves the project in the main window (pin kept).
     #[serde(default)]
     pub project_windows: std::collections::HashMap<Uuid, ProjectWindow>,
+    /// Projects pinned to the top-bar switcher slots (slot = index; None =
+    /// empty). Slots are stable: unpinning leaves the slot empty rather than
+    /// renumbering the rest.
+    #[serde(default)]
+    pub pinned_projects: [Option<Uuid>; 4],
 }
 
 /// Where a project's dedicated window lives: which monitor (stable UUID) and
@@ -857,6 +862,50 @@ impl Workspace {
 
     pub fn instance_mut(&mut self, id: Uuid) -> Option<&mut Instance> {
         self.instances.iter_mut().find(|i| i.id == id)
+    }
+
+    /// The top-bar switcher slot a project occupies (0-based), if pinned.
+    pub fn pin_slot(&self, pid: Uuid) -> Option<usize> {
+        self.pinned_projects.iter().position(|p| *p == Some(pid))
+    }
+
+    /// Pin a project to the first empty switcher slot and return its slot.
+    /// Idempotent: an already-pinned project keeps its slot. `None` when all
+    /// four slots are taken.
+    pub fn pin_project(&mut self, pid: Uuid) -> Option<usize> {
+        if let Some(slot) = self.pin_slot(pid) {
+            return Some(slot);
+        }
+        let slot = self.pinned_projects.iter().position(|p| p.is_none())?;
+        self.pinned_projects[slot] = Some(pid);
+        Some(slot)
+    }
+
+    /// Remove a project from its switcher slot, leaving the slot empty.
+    pub fn unpin_project(&mut self, pid: Uuid) {
+        for slot in &mut self.pinned_projects {
+            if *slot == Some(pid) {
+                *slot = None;
+            }
+        }
+    }
+
+    /// The next/previous pinned project in slot order, wrapping, relative to
+    /// `from`. Starting from an unpinned (or no) project picks the first
+    /// (forward) or last (backward) pinned one. `None` when nothing is pinned.
+    pub fn cycle_pinned_project(&self, from: Option<Uuid>, forward: bool) -> Option<Uuid> {
+        let pinned: Vec<Uuid> = self.pinned_projects.iter().flatten().copied().collect();
+        let len = pinned.len();
+        if len == 0 {
+            return None;
+        }
+        let idx = match from.and_then(|f| pinned.iter().position(|p| *p == f)) {
+            Some(i) if forward => (i + 1) % len,
+            Some(i) => (i + len - 1) % len,
+            None if forward => 0,
+            None => len - 1,
+        };
+        Some(pinned[idx])
     }
 
     /// Add a project; it becomes active if none was.
@@ -954,6 +1003,19 @@ impl Workspace {
 /// treats them as separate agents (and closing one kills the session under the
 /// other). Run on load, so a workspace that got into this state is repaired rather
 /// than reproducing it every launch.
+/// Drop top-bar pin slots whose project no longer exists (a pin created before
+/// deletes unpinned, or a workspace saved mid-delete). Slots stay empty —
+/// nothing renumbers — and the ids are gone, so they cannot occupy slots or
+/// enter the project cycler.
+pub fn prune_dangling_pins(workspace: &mut Workspace) {
+    let known: std::collections::HashSet<Uuid> = workspace.projects.iter().map(|p| p.id).collect();
+    for slot in &mut workspace.pinned_projects {
+        if slot.is_some_and(|pid| !known.contains(&pid)) {
+            *slot = None;
+        }
+    }
+}
+
 pub fn dedupe_instances(workspace: &mut Workspace) {
     use std::collections::HashSet;
     let mut seen_ids: HashSet<Uuid> = HashSet::new();
@@ -1988,6 +2050,53 @@ mod settings_tests {
         };
         assert!(!s.seed_builtin_presets());
         assert!(!s.presets.iter().any(|p| p.name == "Ollama"));
+    }
+
+    #[test]
+    fn dangling_pins_are_pruned_without_renumbering() {
+        let mut w = Workspace::default();
+        let alive = Project::new("alive".to_string(), "/w/alive".to_string());
+        let alive_id = w.add_project(alive);
+        let ghost = Uuid::new_v4();
+        assert_eq!(w.pin_project(ghost), Some(0));
+        assert_eq!(w.pin_project(alive_id), Some(1));
+        // The ghost pins a project that never existed: pruned at load, its slot
+        // stays empty and the live pin keeps its slot.
+        prune_dangling_pins(&mut w);
+        assert_eq!(w.pinned_projects, [None, Some(alive_id), None, None]);
+    }
+
+    #[test]
+    fn pinned_projects_fill_stable_slots_and_cycle() {
+        let mut w = Workspace::default();
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        let c = Uuid::new_v4();
+        let d = Uuid::new_v4();
+        // Pins fill slots 1-4 in order and are idempotent.
+        assert_eq!(w.pin_project(a), Some(0));
+        assert_eq!(w.pin_project(b), Some(1));
+        assert_eq!(w.pin_project(a), Some(0));
+        assert_eq!(w.pin_project(c), Some(2));
+        assert_eq!(w.pin_project(d), Some(3));
+        // Full: a fifth project has nowhere to go.
+        assert_eq!(w.pin_project(Uuid::new_v4()), None);
+        // Unpinning leaves the slot empty — no renumbering.
+        w.unpin_project(b);
+        assert_eq!(w.pinned_projects, [Some(a), None, Some(c), Some(d)]);
+        // Cycling walks slot order and wraps both ways.
+        assert_eq!(w.cycle_pinned_project(Some(a), true), Some(c));
+        assert_eq!(w.cycle_pinned_project(Some(a), false), Some(d));
+        assert_eq!(w.cycle_pinned_project(Some(d), true), Some(a));
+        // From an unpinned (or no) project: forward starts at the first, back
+        // at the last.
+        assert_eq!(w.cycle_pinned_project(None, true), Some(a));
+        assert_eq!(w.cycle_pinned_project(Some(b), false), Some(d));
+        // A single pinned project cycles to itself; nothing pinned is a no-op.
+        let mut one = Workspace::default();
+        assert_eq!(one.cycle_pinned_project(None, true), None);
+        assert_eq!(one.pin_project(a), Some(0));
+        assert_eq!(one.cycle_pinned_project(Some(a), true), Some(a));
     }
 
     #[test]

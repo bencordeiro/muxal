@@ -1354,6 +1354,9 @@ actions!(
         SendBackTab,
         // Copy selected rendered text or delegate to the focused input.
         CopySelection,
+        // Cycle through the pinned projects (top-bar slots), wrapping.
+        CycleProjects,
+        CycleProjectsPrev,
     ]
 );
 
@@ -1435,6 +1438,8 @@ fn keybinding_for(action: &str, keystroke: &str, context: Option<&str>) -> Optio
                 None => return None,
             }
         }
+        "CycleProjects" => KeyBinding::new(keystroke, CycleProjects, context),
+        "CycleProjectsPrev" => KeyBinding::new(keystroke, CycleProjectsPrev, context),
         _ => return None,
     })
 }
@@ -4344,6 +4349,7 @@ impl MuxalApp {
         // mirror each other, and closing one would kill the session under the other.
         // Normally a no-op.
         muxal_core::dedupe_instances(&mut workspace);
+        muxal_core::prune_dangling_pins(&mut workspace);
         self.workspace = workspace;
         let active = self
             .workspace
@@ -5680,6 +5686,14 @@ impl MuxalApp {
             .and_then(|p| p.preferred_instance());
         if let Some(iid) = self.active_instance {
             self.focus_instance_with_attendance(iid, attend_first_pane, window, cx);
+        } else {
+            // A pane-less project has nothing to focus. Focus the app root
+            // handle — the same neutral state as clicking the toolbar chrome —
+            // instead of leaving the previous project's now-hidden terminal
+            // focused: gpui routes actions through the root only while its own
+            // handle is focused (blur leaves shortcuts dead), so this keeps the
+            // project cycler and friends alive.
+            self.deselect_pane(window, cx);
         }
         self.ensure_project_terminals_deferred(pid, window, cx);
         // Keep the file browser pointed at the project being shown.
@@ -5695,6 +5709,27 @@ impl MuxalApp {
 
     fn focus_instance(&mut self, iid: Uuid, window: &mut Window, cx: &mut Context<Self>) {
         self.focus_instance_with_attendance(iid, true, window, cx);
+    }
+
+    /// Move keyboard focus to `next` in the window showing `pid`, for call sites
+    /// with no `&mut Window` in scope (exit/loop auto-closes). Without this the
+    /// closed pane's dangling focus handle keeps swallowing keystrokes.
+    fn refocus_in_shown_window(&mut self, next: Uuid, pid: Option<Uuid>, cx: &mut Context<Self>) {
+        let handle = self
+            .secondary_windows
+            .iter()
+            .find(|s| Some(s.pid) == pid)
+            .map(|s| s.handle)
+            .or(self.main_window);
+        let Some(win) = handle else {
+            return;
+        };
+        let entity = cx.entity();
+        let _ = win.update(cx, move |_root, window, app| {
+            entity.update(app, |this, cx| {
+                this.focus_instance(next, window, cx);
+            });
+        });
     }
 
     fn focus_instance_with_attendance(
@@ -7176,7 +7211,7 @@ impl MuxalApp {
             // Closing a pane tears its tmux session down too (a *dropped* SSH
             // connection exits abnormally and tombstones instead, staying
             // reconnectable).
-            self.close_instance_inner(iid, "auto-close (exit)", cx); // re-renders on its own
+            self.close_instance_inner(iid, "auto-close (exit)", None, cx); // re-renders on its own
         }
 
         if activity_changed {
@@ -7354,7 +7389,7 @@ impl MuxalApp {
             self.running_loops.remove(&iid);
         }
         for iid in close {
-            self.close_instance_inner(iid, "loop post-run", cx);
+            self.close_instance_inner(iid, "loop post-run", None, cx);
         }
     }
 
@@ -9391,8 +9426,8 @@ impl MuxalApp {
         }
     }
 
-    fn close_instance(&mut self, iid: Uuid, cx: &mut Context<Self>) {
-        self.close_instance_inner(iid, "close", cx);
+    fn close_instance(&mut self, iid: Uuid, window: Option<&mut Window>, cx: &mut Context<Self>) {
+        self.close_instance_inner(iid, "close", window, cx);
     }
 
     /// Close an instance: drop its pane, kill the process, and tear down its tmux
@@ -9401,7 +9436,13 @@ impl MuxalApp {
     /// Reached only by a deliberate close and by auto-close on a *clean* exit; a
     /// dropped remote connection exits abnormally and tombstones the pane instead,
     /// so a still-running session stays reconnectable.
-    fn close_instance_inner(&mut self, iid: Uuid, reason: &'static str, cx: &mut Context<Self>) {
+    fn close_instance_inner(
+        &mut self,
+        iid: Uuid,
+        reason: &'static str,
+        window: Option<&mut Window>,
+        cx: &mut Context<Self>,
+    ) {
         ui_profile::unregister_focus_pane(iid);
         // Invalidate a PTY still being created. Its eventual result sees the
         // missing token, drops, and kills the child instead of becoming invisible.
@@ -9467,6 +9508,17 @@ impl MuxalApp {
         if self.active_instance == Some(iid) {
             self.active_instance =
                 survivor.or_else(|| self.workspace.active().and_then(|p| p.first_instance()));
+            // Hand keyboard focus to the survivor too. gpui never blurs a focus
+            // handle whose element is gone (FocusHandle::drop only unrefs it), so
+            // the dead pane's handle would swallow every shortcut — arrows
+            // included — until the user clicked a live pane again.
+            if let Some(next) = self.active_instance {
+                match window {
+                    Some(window) => self.focus_instance(next, window, cx),
+                    // Exit/loop auto-closes run without a window in scope.
+                    None => self.refocus_in_shown_window(next, pid, cx),
+                }
+            }
         }
         self.persist();
         cx.notify();
@@ -10567,7 +10619,7 @@ impl MuxalApp {
         // (dispose_worktree_if_orphaned no-ops when the worktree is gone).
         self.workspace.remove_worktree_meta(wid);
         for iid in instances {
-            self.close_instance(iid, cx);
+            self.close_instance(iid, None, cx);
         }
         integrations::remove_worktree(&root, &path);
         integrations::delete_branch(&root, &branch);
@@ -11069,6 +11121,12 @@ impl MuxalApp {
             .on_action(cx.listener(|this, a: &JumpToProject, window, cx| {
                 this.jump_to_project(a.0, window, cx)
             }))
+            .on_action(cx.listener(|this, _: &CycleProjects, window, cx| {
+                this.cycle_projects(true, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CycleProjectsPrev, window, cx| {
+                this.cycle_projects(false, window, cx)
+            }))
             .on_action(
                 cx.listener(|this, a: &NewAgent, window, cx| {
                     this.new_agent_preset(a.0, window, cx)
@@ -11533,9 +11591,9 @@ impl MuxalApp {
         }
     }
 
-    fn close_active(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    fn close_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(active) = self.active_instance {
-            self.request_close_instance(active, cx);
+            self.request_close_instance(active, Some(window), cx);
         }
     }
 
@@ -11551,7 +11609,12 @@ impl MuxalApp {
     }
 
     /// Close a pane, asking first if its kind's confirm-on-close is enabled.
-    fn request_close_instance(&mut self, iid: Uuid, cx: &mut Context<Self>) {
+    fn request_close_instance(
+        &mut self,
+        iid: Uuid,
+        window: Option<&mut Window>,
+        cx: &mut Context<Self>,
+    ) {
         let kind = self
             .workspace
             .instance(iid)
@@ -11599,7 +11662,7 @@ impl MuxalApp {
                 cx,
             );
         } else {
-            self.close_instance(iid, cx);
+            self.close_instance(iid, window, cx);
         }
     }
 
@@ -11677,12 +11740,8 @@ impl MuxalApp {
             ConfirmAction::DeleteRunner(idx) => self.delete_runner(idx, cx),
             ConfirmAction::DeleteSnippet(idx) => self.delete_snippet(idx, cx),
             ConfirmAction::DeleteLoop(idx) => self.delete_loop(idx, cx),
-            ConfirmAction::CloseInstance(iid) => {
-                self.close_instance(iid, cx);
-                if let Some(next) = self.active_instance {
-                    self.focus_instance(next, window, cx);
-                }
-            }
+            // The close hands keyboard focus to the surviving pane itself.
+            ConfirmAction::CloseInstance(iid) => self.close_instance(iid, Some(window), cx),
             ConfirmAction::CloseOtherTabs(keep) => {
                 self.close_other_tabs_now(keep, window, cx);
             }
@@ -11888,7 +11947,7 @@ impl MuxalApp {
     /// Close the other tabs directly (no per-tab prompt), then focus `keep`.
     fn close_other_tabs_now(&mut self, keep: Uuid, window: &mut Window, cx: &mut Context<Self>) {
         for id in self.other_tabs_in_pane(keep) {
-            self.close_instance(id, cx);
+            self.close_instance(id, Some(window), cx);
         }
         self.focus_instance(keep, window, cx);
     }
@@ -11961,7 +12020,7 @@ impl MuxalApp {
         cx: &mut Context<Self>,
     ) {
         for id in self.tabs_to_side(anchor, right) {
-            self.close_instance(id, cx);
+            self.close_instance(id, Some(window), cx);
         }
         self.focus_instance(anchor, window, cx);
     }
@@ -12191,6 +12250,31 @@ impl MuxalApp {
         if self.workspace.active_project != Some(pid) {
             self.select_project(pid, window, cx);
         }
+    }
+
+    /// Cycle through the pinned projects (top-bar slot order, wrapping).
+    fn cycle_projects(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(pid) = self
+            .workspace
+            .cycle_pinned_project(self.workspace.active_project, forward)
+        else {
+            return;
+        };
+        if self.workspace.active_project != Some(pid) {
+            self.select_project(pid, window, cx);
+        }
+    }
+
+    /// Pin/unpin a project to the top-bar switcher slots.
+    fn toggle_pin_project(&mut self, pid: Uuid, cx: &mut Context<Self>) {
+        if self.workspace.pin_slot(pid).is_some() {
+            self.workspace.unpin_project(pid);
+        } else {
+            // All slots full: no-op (slots stay stable, nothing evicted).
+            let _ = self.workspace.pin_project(pid);
+        }
+        self.persist();
+        cx.notify();
     }
 
     /// Focus the next agent that needs attention — blocked panes first (they're
@@ -13952,8 +14036,8 @@ impl MuxalApp {
                             .with_size(sz)
                             .icon(IconName::Close)
                             .tooltip(t("Close"))
-                            .on_click(cx.listener(move |this, _e, _w, cx| {
-                                this.request_close_instance(iid, cx)
+                            .on_click(cx.listener(move |this, _e, window, cx| {
+                                this.request_close_instance(iid, Some(window), cx)
                             })),
                     );
 
@@ -14058,8 +14142,8 @@ impl MuxalApp {
                             // Middle-click closes the tab, like a browser.
                             .on_mouse_down(
                                 MouseButton::Middle,
-                                cx.listener(move |this, _e, _w, cx| {
-                                    this.request_close_instance(tab, cx)
+                                cx.listener(move |this, _e, window, cx| {
+                                    this.request_close_instance(tab, Some(window), cx)
                                 }),
                             )
                             // Drag a single tab to move it into another pane.
@@ -14248,8 +14332,12 @@ impl MuxalApp {
                                                 .icon(IconName::Close)
                                                 .on_click(window.listener_for(
                                                     &entity,
-                                                    move |this, _, _w, cx| {
-                                                        this.request_close_instance(tab, cx)
+                                                    move |this, _, window, cx| {
+                                                        this.request_close_instance(
+                                                            tab,
+                                                            Some(window),
+                                                            cx,
+                                                        )
                                                     },
                                                 )),
                                         )
@@ -14302,8 +14390,8 @@ impl MuxalApp {
                                         .icon(IconName::Close)
                                         .tooltip(t("Close tab"))
                                         .on_click(
-                                            cx.listener(move |this, _e, _w, cx| {
-                                                this.request_close_instance(tab, cx)
+                                            cx.listener(move |this, _e, window, cx| {
+                                                this.request_close_instance(tab, Some(window), cx)
                                             }),
                                         ),
                                     ),
@@ -15956,6 +16044,27 @@ impl MuxalApp {
                             )
                     }))
                     .child(
+                        // Pin to the top-bar project switcher (slots 1-4).
+                        div()
+                            .flex_none()
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .child(
+                                Button::new(SharedString::from(format!("pin-{ix}")))
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(Icon::empty().path("icons/pin.svg"))
+                                    .selected(self.workspace.pin_slot(pid).is_some())
+                                    .tooltip(if self.workspace.pin_slot(pid).is_some() {
+                                        t("Unpin from the top bar")
+                                    } else {
+                                        t("Pin to the top bar")
+                                    })
+                                    .on_click(cx.listener(move |this, _e, _w, cx| {
+                                        this.toggle_pin_project(pid, cx)
+                                    })),
+                            ),
+                    )
+                    .child(
                         div()
                             .flex_none()
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -16546,8 +16655,12 @@ impl MuxalApp {
                                             .icon(IconName::CircleX)
                                             .on_click(window.listener_for(
                                                 &entity,
-                                                move |this, _, _window, cx| {
-                                                    this.request_close_instance(iid, cx)
+                                                move |this, _, window, cx| {
+                                                    this.request_close_instance(
+                                                        iid,
+                                                        Some(window),
+                                                        cx,
+                                                    )
                                                 },
                                             )),
                                     )
@@ -16746,6 +16859,43 @@ impl MuxalApp {
                     .tooltip(t("Git diff"))
                     .on_click(cx.listener(|this, _ev, _w, cx| this.toggle_git_diff(cx))),
             ))
+            // Four pinned-project slots, same size as the git-diff button: click
+            // switches, right-click unpins. Empty slots stay visible (dimmed) so
+            // the numbering never shifts under muscle memory.
+            .children((0..4usize).map(|slot| {
+                let pinned = self.workspace.pinned_projects[slot];
+                let name = pinned
+                    .and_then(|pid| self.workspace.project(pid))
+                    .map(|p| p.name.clone());
+                let active = pinned.is_some_and(|pid| self.workspace.active_project == Some(pid));
+                let tooltip = match &name {
+                    Some(name) => format!("{name} — {}", t("right-click to unpin")),
+                    None => format!("{} {}", t("Pin slot"), slot + 1),
+                };
+                nodrag(
+                    Button::new(SharedString::from(format!("pin-slot-{slot}")))
+                        .ghost()
+                        .label((slot + 1).to_string())
+                        .selected(active)
+                        .disabled(pinned.is_none())
+                        .tooltip(tooltip)
+                        .on_click(cx.listener(move |this, _e, window, cx| {
+                            if let Some(pid) = this.workspace.pinned_projects[slot]
+                                && this.workspace.active_project != Some(pid)
+                            {
+                                this.select_project(pid, window, cx);
+                            }
+                        }))
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener(move |this, _e, _w, cx| {
+                                if let Some(pid) = this.workspace.pinned_projects[slot] {
+                                    this.toggle_pin_project(pid, cx);
+                                }
+                            }),
+                        ),
+                )
+            }))
     }
 
     /// The standalone pane toolbar (kept for popped-out project windows, which
@@ -18226,9 +18376,11 @@ impl MuxalApp {
             .map(|p| p.instances())
             .unwrap_or_default();
         for iid in iids {
-            self.close_instance(iid, cx);
+            self.close_instance(iid, None, cx);
         }
         self.workspace.projects.retain(|p| p.id != pid);
+        // A pinned project that goes away keeps its slot empty — no ghost pin.
+        self.workspace.unpin_project(pid);
         if self.workspace.active_project == Some(pid) {
             self.workspace.active_project = self.workspace.projects.first().map(|p| p.id);
         }

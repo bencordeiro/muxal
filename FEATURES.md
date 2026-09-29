@@ -484,6 +484,13 @@ feature is added or changed, update the matching entry here in the same change**
 
 ## Sidebar & projects
 
+- **Project pinning** — pin up to four projects to numbered slots (1–4) beside
+  the git-diff button in the top bar, and switch between them with the sidebar
+  closed. Click a slot to switch; right-click it (or use the pin icon on a
+  sidebar project row) to unpin. Slots are stable — an emptied slot just goes
+  dim, nothing renumbers. `Alt+P` / `Alt+Shift+P` cycle the pins (rebindable in
+  Settings → Keybindings). Pins persist per workspace.
+
 - **Empty-workspace onboarding** — a fresh workspace shows a centered get-started
   screen (the muxal mark, an **Add a project** folder picker, and the
   keyboard-shortcuts chord) in the work area until the first project is added.

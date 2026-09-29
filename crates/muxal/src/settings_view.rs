@@ -84,6 +84,9 @@ pub const DEFAULT_KEYBINDINGS: &[(&str, &str, Option<&str>)] = &[
     ("NewAgent7", "ctrl-alt-7", None),
     ("NewAgent8", "ctrl-alt-8", None),
     ("NewAgent9", "ctrl-alt-9", None),
+    // Cycle the pinned projects (top-bar slots), wrapping.
+    ("CycleProjects", "alt-p", None),
+    ("CycleProjectsPrev", "alt-shift-p", None),
 ];
 
 /// Actions whose plain `ctrl-<letter>` binding stays live while a terminal is
