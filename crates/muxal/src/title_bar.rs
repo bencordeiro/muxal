@@ -16,8 +16,8 @@ use std::rc::Rc;
 
 use gpui::{
     AnyElement, App, ClickEvent, Decorations, Hsla, InteractiveElement, IntoElement, MouseButton,
-    ParentElement, Pixels, Render, RenderOnce, StatefulInteractiveElement as _, StyleRefinement,
-    Styled, TitlebarOptions, Window, WindowControlArea, div, prelude::FluentBuilder as _, px,
+    ParentElement, Pixels, RenderOnce, StatefulInteractiveElement as _, StyleRefinement, Styled,
+    TitlebarOptions, Window, WindowControlArea, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{
     ActiveTheme, Icon, IconName, InteractiveElementExt as _, Sizable as _, StyledExt as _, h_flex,
@@ -278,13 +278,6 @@ impl ParentElement for TitleBar {
 
 struct TitleBarState {
     should_move: bool,
-}
-
-// TODO: Remove this when GPUI has released v0.2.3
-impl Render for TitleBarState {
-    fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
-        div()
-    }
 }
 
 impl RenderOnce for TitleBar {
