@@ -41,6 +41,17 @@ jobs:
       - name: install-script sandbox tests
         run: scripts/test-get.sh
 
+  # The English string IS the translation key, so en.json is the key list every
+  # locale is measured against. If it drifts from the t()/tf()/tn() calls in the
+  # source, new UI strings silently render in English for every non-English
+  # user — so the drift is a hard failure here instead.
+  i18n:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: catalog in sync with source
+        run: python3 scripts/translate.py --check
+
   test:
     strategy:
       fail-fast: false
