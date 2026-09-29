@@ -7,6 +7,6 @@ Exec=muxal
 Icon=muxal
 Terminal=false
 Categories=Development;TerminalEmulator;
-Keywords=terminal;multiplexer;agent;claude;tmux;
+Keywords=terminal;multiplexer;agent;claude;tmux;muxel;
 StartupNotify=true
 StartupWMClass=muxal

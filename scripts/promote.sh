@@ -36,5 +36,7 @@ trap - EXIT
 echo "main updated: $dest — restart muxal to run it." >&2
 
 # Clean up pre-rename (muxel) install leftovers so no launcher entry can point
-# at a stale binary.
+# at a stale binary, then re-register the launcher entry for the new name so a
+# promote never orphans the menu entry (only install.sh used to create it).
 rm -f "$dest_dir/muxel" "$HOME/.local/share/applications/muxel.desktop"
+MUXAL_EXEC="$dest" "$repo_root/scripts/install-desktop.sh" --no-build
