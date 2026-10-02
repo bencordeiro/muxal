@@ -43,3 +43,6 @@ issues1.txt
 # Dev sandboxes (local test state; both the pre- and post-rename names)
 .muxel-dev/
 .muxal-dev/
+
+# Backlog, deliberately untracked.
+/IDEAS.md

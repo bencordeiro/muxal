@@ -30,6 +30,7 @@ pub const DEFAULT_KEYBINDINGS: &[(&str, &str, Option<&str>)] = &[
     ("FocusNext", "ctrl-shift-]", None),
     ("FocusPrev", "ctrl-shift-[", None),
     ("FocusLeft", "ctrl-alt-left", None),
+    ("MinimizePane", "ctrl-shift-m", None),
     ("FocusRight", "ctrl-alt-right", None),
     ("FocusUp", "ctrl-alt-up", None),
     ("FocusDown", "ctrl-alt-down", None),

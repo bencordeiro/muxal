@@ -450,6 +450,13 @@ impl EditorView {
     pub fn text(&self, cx: &App) -> String {
         self.input.read(cx).value().to_string()
     }
+    /// Insert `text` at the cursor (a dropped file's path reference lands
+    /// where the caret is).
+    pub fn insert_text(&self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.input
+            .update(cx, |input, cx| input.insert(text, window, cx));
+    }
+
     pub fn cursor(&self, cx: &App) -> Position {
         self.input.read(cx).cursor_position()
     }
