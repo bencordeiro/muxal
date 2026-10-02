@@ -31,11 +31,11 @@ use muxal_core::{
     InstanceKind, Loop, LoopSchedule, MEMORY_DIR, MEMORY_FILE, PaneNode, PostRunAction, Project,
     ResolvedLaunch, Runner, Snippet, SplitDirection, StartupAgent, Workspace, WorkspaceMeta,
     WorkspacesIndex, Worktree, add_tab, add_tab_at, agent_activity_label, append_agent_instruction,
-    codex_developer_instructions_override, first_shown_instance, focus_in_direction, is_minimized,
-    memory_instruction, memory_reference, migrate_worktrees, move_into_split, move_into_tabs,
-    move_pane_beside, move_tab_to, remove, resolve_launch_for_session, set_active_tab,
-    set_minimized, set_split_sizes, set_tab_order, split, split_beside, swap_instances, swap_panes,
-    sync_agent_injection_modes, sync_codex_approval_args,
+    codex_developer_instructions_override, focus_in_direction, memory_instruction,
+    memory_reference, migrate_worktrees, move_into_split, move_into_tabs, move_pane_beside,
+    move_tab_to, remove, resolve_launch_for_session, set_active_tab, set_split_sizes,
+    set_tab_order, split, split_beside, swap_instances, swap_panes, sync_agent_injection_modes,
+    sync_codex_approval_args,
 };
 use muxal_terminal::{
     AgentStatus, CommandSpec, TerminalLaunch, TerminalMouseMode, TerminalSession, TerminalView,
@@ -1354,8 +1354,6 @@ actions!(
         SendBackTab,
         // Copy selected rendered text or delegate to the focused input.
         CopySelection,
-        // Collapse the active pane to its tab strip: hidden, still running.
-        MinimizePane,
         // Cycle through the pinned projects (top-bar slots), wrapping.
         CycleProjects,
         CycleProjectsPrev,
@@ -1402,7 +1400,6 @@ fn keybinding_for(action: &str, keystroke: &str, context: Option<&str>) -> Optio
         "ClearTerminal" => KeyBinding::new(keystroke, ClearTerminal, context),
         "FocusAttention" => KeyBinding::new(keystroke, FocusAttention, context),
         "FocusLeft" => KeyBinding::new(keystroke, FocusLeft, context),
-        "MinimizePane" => KeyBinding::new(keystroke, MinimizePane, context),
         "FocusRight" => KeyBinding::new(keystroke, FocusRight, context),
         "FocusUp" => KeyBinding::new(keystroke, FocusUp, context),
         "FocusDown" => KeyBinding::new(keystroke, FocusDown, context),
@@ -10833,133 +10830,6 @@ impl MuxalApp {
         cx.notify();
     }
 
-    /// Collapse the pane holding `iid` to its tab strip — hidden, but its tabs
-    /// keep running. The inverse of maximize; restoring brings the pane back at
-    /// its old size (stored split sizes are never touched while minimized).
-    fn toggle_minimize(&mut self, iid: Uuid, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(pid) = self.workspace.instance(iid).map(|i| i.project_id) else {
-            return;
-        };
-        let Some(current) = self
-            .workspace
-            .project(pid)
-            .map(|p| is_minimized(&p.layout, iid))
-        else {
-            return;
-        };
-        let Some(current) = current else {
-            return;
-        };
-        if let Some(p) = self.workspace.project_mut(pid) {
-            set_minimized(&mut p.layout, iid, !current);
-        }
-        self.persist();
-        if current {
-            // Restoring: show and focus the pane again.
-            self.focus_instance(iid, window, cx);
-        } else if self
-            .active_instance
-            .is_some_and(|a| self.workspace.instance(a).map(|i| i.project_id) == Some(pid))
-        {
-            // The hidden pane can't hold focus — hand it to the first pane
-            // still shown (the same lesson as the close-instance hand-off),
-            // or the workspace root when the whole project is folded away.
-            let next = self
-                .workspace
-                .project(pid)
-                .and_then(|p| first_shown_instance(&p.layout));
-            match next {
-                Some(next) => self.focus_instance(next, window, cx),
-                None => self.deselect_pane(window, cx),
-            }
-        }
-        cx.notify();
-    }
-
-    /// A minimized pane: just its tab strip — pills to pick a tab (clicking one
-    /// restores the pane on that tab), plus a restore button. The tabs keep
-    /// running behind it. A dropped file reference restores the pane too, so
-    /// the path lands where the prompt is visible again.
-    fn render_minimized_strip(
-        &self,
-        ld: &muxal_core::LeafData,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let tabs = ld.tabs.clone();
-        let anchor = tabs[0]; // `tabs` is never empty (pane.rs invariant)
-        let active = ld.active_instance();
-        let sz = self.strip_btn_size();
-        let muted = cx.theme().muted_foreground;
-        let hover_bg = cx.theme().sidebar_accent.opacity(0.5);
-        let drop_hl = cx.theme().primary.opacity(0.4);
-
-        let pills: Vec<AnyElement> = tabs
-            .iter()
-            .map(|&tab| {
-                let title = self.instance_title(tab, cx);
-                let program = self.workspace.instance(tab).and_then(|i| i.program.clone());
-                div()
-                    .id(SharedString::from(format!("min-tab-{}", tab.simple())))
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .px_1()
-                    .min_w_0()
-                    .max_w(px(180.0))
-                    .rounded(cx.theme().radius)
-                    .cursor_pointer()
-                    .hover(move |s| s.bg(hover_bg))
-                    .on_click(cx.listener(move |this, _e, window, cx| {
-                        this.toggle_minimize(tab, window, cx);
-                    }))
-                    .child(agent_icon(program.as_deref(), px(10.0), muted))
-                    .child(
-                        div()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(title),
-                    )
-                    .into_any_element()
-            })
-            .collect();
-
-        div()
-            .id(SharedString::from(format!("minimized-{}", anchor.simple())))
-            .size_full()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap_1()
-            .px_1()
-            .rounded(cx.theme().radius_lg)
-            .border_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().background)
-            .overflow_hidden()
-            .on_drop::<DragFileRef>(cx.listener(move |this, p: &DragFileRef, window, cx| {
-                this.toggle_minimize(active, window, cx);
-                this.insert_path_reference(active, &p.path, window, cx);
-            }))
-            .drag_over::<DragFileRef>(move |s, _, _, _| s.border_color(drop_hl))
-            .children(pills)
-            .child(div().flex_1())
-            .child(
-                Button::new(SharedString::from(format!("restore-{}", anchor.simple())))
-                    .ghost()
-                    .with_size(sz)
-                    .icon(IconName::ChevronUp)
-                    .tooltip(t("Restore pane"))
-                    .on_click(cx.listener(move |this, _e, window, cx| {
-                        this.toggle_minimize(anchor, window, cx);
-                    })),
-            )
-            .into_any_element()
-    }
-
     /// The tabs sharing a pane with the maximized instance: the tab group the
     /// maximize covers. Empty when nothing is maximized or it left the layout.
     fn maximized_group(&self) -> Vec<Uuid> {
@@ -11418,11 +11288,6 @@ impl MuxalApp {
             }))
             .on_action(cx.listener(|this, _: &FocusDown, window, cx| {
                 this.focus_direction(FocusDir::Down, window, cx)
-            }))
-            .on_action(cx.listener(|this, _: &MinimizePane, window, cx| {
-                if let Some(iid) = this.active_instance {
-                    this.toggle_minimize(iid, window, cx);
-                }
             }))
             .on_action(cx.listener(|this, _: &ShowKeys, window, cx| {
                 this.activate_main_window(window, cx);
@@ -12719,18 +12584,12 @@ impl MuxalApp {
     /// Focus the next agent that needs attention — blocked panes first (they're
     /// waiting on the user), then done. Cycles past the currently active one.
     fn focus_attention(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // All instances across projects, in a stable order. Minimized panes are
-        // "not up" — nothing to see there.
+        // All instances across projects, in a stable order.
         let order: Vec<Uuid> = self
             .workspace
             .projects
             .iter()
-            .flat_map(|p| {
-                p.instances()
-                    .into_iter()
-                    .filter(|iid| is_minimized(&p.layout, *iid) != Some(true))
-                    .collect::<Vec<_>>()
-            })
+            .flat_map(|p| p.instances())
             .collect();
         let rank = |iid: &Uuid| -> Option<u8> {
             attention_rank(
@@ -14149,11 +14008,6 @@ impl MuxalApp {
                 if ld.tabs.is_empty() {
                     return div().size_full().into_any_element();
                 }
-                // Minimized: just the tab strip — the tabs keep running behind
-                // it until the pane is restored.
-                if ld.minimized {
-                    return self.render_minimized_strip(ld, cx);
-                }
                 // Each pane is a tab group. The focused pane shows its focused
                 // tab (== active_instance); other panes show their own saved
                 // active tab. Aliasing `iid`/`is_active` keeps the controls block
@@ -14497,16 +14351,6 @@ impl MuxalApp {
                                         let _ = (this, window, cx);
                                     }))
                             }),
-                    )
-                    .child(
-                        Button::new(SharedString::from(format!("min-{sid}")))
-                            .ghost()
-                            .with_size(sz)
-                            .icon(IconName::ChevronDown)
-                            .tooltip(t("Minimize pane — hide it and keep it running"))
-                            .on_click(cx.listener(move |this, _e, window, cx| {
-                                this.toggle_minimize(iid, window, cx);
-                            })),
                     )
                     .child(
                         Button::new(SharedString::from(format!("max-{sid}")))
@@ -15181,20 +15025,6 @@ impl MuxalApp {
                 // cross axis (height for a horizontal split) keeps the default.
                 for (i, child) in children.iter().enumerate() {
                     let pane = self.render_pane(child, cx);
-                    if child.is_minimized_leaf() {
-                        // A minimized pane is just its tab strip: fixed at the
-                        // strip height while the siblings take the freed space.
-                        // Its stored size stays untouched (see `set_split_sizes`),
-                        // so restoring brings back the old layout exactly.
-                        let strip = px(self.settings.tab_strip_height);
-                        group = group.child(
-                            resizable_panel()
-                                .size(strip)
-                                .size_range(strip..strip)
-                                .child(pane),
-                        );
-                        continue;
-                    }
                     let minimum = if horizontal {
                         child.min_width(f32::from(MIN_PANE_WIDTH))
                     } else {
@@ -22940,7 +22770,6 @@ mod split_resize_tests {
                 pane_id: Uuid::new_v4(),
                 tabs: vec![terminal_a, editor],
                 active: 0,
-                minimized: false,
             }),
             PaneNode::Split {
                 direction: SplitDirection::Vertical,

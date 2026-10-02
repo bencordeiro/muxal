@@ -62,11 +62,6 @@ fn ranges_overlap(a0: f32, a1: f32, b0: f32, b1: f32) -> bool {
 fn collect_leaf_rects(node: &PaneNode, rect: Rect, from: Uuid, out: &mut Vec<(Rect, Uuid, bool)>) {
     match node {
         PaneNode::Leaf(ld) => {
-            // A minimized pane is "not up": invisible to focus navigation,
-            // except as the source (so focus can find its way back out).
-            if ld.minimized && !ld.tabs.contains(&from) {
-                return;
-            }
             out.push((rect, ld.active_instance(), ld.tabs.contains(&from)));
         }
         PaneNode::Split {
@@ -174,15 +169,12 @@ pub struct LeafData {
     pub pane_id: Uuid,
     pub tabs: Vec<Uuid>,
     pub active: usize,
-    /// Minimized to its tab strip: content hidden, tabs keep running. Persisted
-    /// — "leave the backend running minimized" is a layout worth having back.
-    pub minimized: bool,
 }
 
 impl PartialEq for LeafData {
     fn eq(&self, other: &Self) -> bool {
         // `pane_id` is renderer identity, not user-visible layout content.
-        self.tabs == other.tabs && self.active == other.active && self.minimized == other.minimized
+        self.tabs == other.tabs && self.active == other.active
     }
 }
 
@@ -192,7 +184,6 @@ impl LeafData {
             pane_id: Uuid::new_v4(),
             tabs: vec![instance],
             active: 0,
-            minimized: false,
         }
     }
 
@@ -218,14 +209,12 @@ impl<'de> Deserialize<'de> for LeafData {
                 let mut instance: Option<Uuid> = None;
                 let mut pane_id: Option<Uuid> = None;
                 let mut active: usize = 0;
-                let mut minimized: bool = false;
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
                         "tabs" => tabs = Some(map.next_value()?),
                         "instance" => instance = Some(map.next_value()?),
                         "pane_id" => pane_id = Some(map.next_value()?),
                         "active" => active = map.next_value()?,
-                        "minimized" => minimized = map.next_value()?,
                         // Ignore unknowns — including the enum's "kind" tag, which
                         // serde leaves in the buffered map for newtype variants.
                         _ => {
@@ -246,7 +235,6 @@ impl<'de> Deserialize<'de> for LeafData {
                     pane_id: pane_id.unwrap_or_else(Uuid::new_v4),
                     tabs,
                     active,
-                    minimized,
                 })
             }
         }
@@ -411,20 +399,6 @@ impl PaneNode {
 
     /// The first instance in reading order (the first tab of the first leaf). A
     /// stable anchor — it does not change as the user switches tabs.
-    /// Whether any leaf in this subtree is minimized.
-    pub fn has_minimized(&self) -> bool {
-        match self {
-            PaneNode::Leaf(ld) => ld.minimized,
-            PaneNode::Split { children, .. } => children.iter().any(Self::has_minimized),
-        }
-    }
-
-    /// Whether this node is itself a minimized leaf. A split only collapses
-    /// the pane it directly contains, not its whole subtree.
-    pub fn is_minimized_leaf(&self) -> bool {
-        matches!(self, PaneNode::Leaf(ld) if ld.minimized)
-    }
-
     pub fn first_instance(&self) -> Option<Uuid> {
         match self {
             PaneNode::Leaf(ld) => ld.tabs.first().copied(),
@@ -878,8 +852,6 @@ pub fn add_tab_at(
     let at = index.min(ld.tabs.len());
     ld.tabs.insert(at, new_instance);
     ld.active = at;
-    // A tab landing in a pane reveals it.
-    ld.minimized = false;
     true
 }
 
@@ -1168,53 +1140,6 @@ pub fn swap_panes(tree: &mut Option<PaneNode>, a: Uuid, b: Uuid) -> bool {
 }
 
 /// Record the (pixel) sizes of the split identified by `key` (see
-/// Set or clear the minimized flag on the leaf holding `instance`. Returns
-/// false when `instance` isn't in the tree.
-pub fn set_minimized(tree: &mut Option<PaneNode>, instance: Uuid, minimized: bool) -> bool {
-    fn walk(node: &mut PaneNode, instance: Uuid, minimized: bool) -> bool {
-        match node {
-            PaneNode::Leaf(ld) => {
-                if ld.tabs.contains(&instance) {
-                    ld.minimized = minimized;
-                    true
-                } else {
-                    false
-                }
-            }
-            PaneNode::Split { children, .. } => {
-                children.iter_mut().any(|c| walk(c, instance, minimized))
-            }
-        }
-    }
-    tree.as_mut()
-        .is_some_and(|root| walk(root, instance, minimized))
-}
-
-/// Whether the leaf holding `instance` is minimized. `None` when the instance
-/// isn't in the tree (popped out, or gone).
-pub fn is_minimized(tree: &Option<PaneNode>, instance: Uuid) -> Option<bool> {
-    fn walk(node: &PaneNode, instance: Uuid) -> Option<bool> {
-        match node {
-            PaneNode::Leaf(ld) => ld.tabs.contains(&instance).then_some(ld.minimized),
-            PaneNode::Split { children, .. } => children.iter().find_map(|c| walk(c, instance)),
-        }
-    }
-    tree.as_ref().and_then(|root| walk(root, instance))
-}
-
-/// The first instance actually shown: the first non-minimized leaf's active
-/// tab. `None` when every pane is minimized (or there are none).
-pub fn first_shown_instance(tree: &Option<PaneNode>) -> Option<Uuid> {
-    fn walk(node: &PaneNode) -> Option<Uuid> {
-        match node {
-            PaneNode::Leaf(ld) if !ld.minimized => Some(ld.active_instance()),
-            PaneNode::Leaf(_) => None,
-            PaneNode::Split { children, .. } => children.iter().find_map(walk),
-        }
-    }
-    tree.as_ref().and_then(walk)
-}
-
 /// [`PaneNode::split_key`]) so the layout restores at those proportions.
 /// Returns true if a matching split was found.
 pub fn set_split_sizes(tree: &mut Option<PaneNode>, key: &str, sizes: &[f32]) -> bool {
@@ -1228,12 +1153,6 @@ pub fn set_split_sizes(tree: &mut Option<PaneNode>, key: &str, sizes: &[f32]) ->
                 ..
             } => {
                 if this_key == key {
-                    // Refuse while any of this split's leaves is minimized: the
-                    // minimized pane's forced strip size would poison its stored
-                    // preference, and restoring must bring the old layout back.
-                    if children.iter().any(PaneNode::has_minimized) {
-                        return true;
-                    }
                     if sizes.len() == children.len() {
                         *node_sizes = sizes.to_vec();
                     }
@@ -1282,7 +1201,6 @@ mod tests {
             pane_id: id(),
             tabs,
             active,
-            minimized: false,
         })
     }
 
@@ -1962,8 +1880,7 @@ mod tests {
             PaneNode::Leaf(LeafData {
                 pane_id: id(),
                 tabs: vec![u],
-                active: 0,
-                minimized: false,
+                active: 0
             })
         );
     }
@@ -2497,76 +2414,6 @@ mod tests {
         assert_eq!(needed, 1700.0);
         assert!(needed > 1440.0, "must scroll on a laptop");
         assert!(needed < 2560.0, "fits the monitor it was built on");
-    }
-
-    #[test]
-    fn minimized_panes_hide_from_focus_and_keep_their_size() {
-        let (l, r) = (id(), id());
-        let mut tree = Some(hsplit(PaneNode::leaf(l), PaneNode::leaf(r)));
-        assert_eq!(
-            focus_in_direction(tree.as_ref().unwrap(), l, FocusDir::Right),
-            Some(r)
-        );
-        set_minimized(&mut tree, r, true);
-        // "Not up": the arrows skip it …
-        assert_eq!(
-            focus_in_direction(tree.as_ref().unwrap(), l, FocusDir::Right),
-            None
-        );
-        // … but focus can still find its way out of it.
-        assert_eq!(
-            focus_in_direction(tree.as_ref().unwrap(), r, FocusDir::Left),
-            Some(l)
-        );
-        // Its forced strip size must not leak into the stored preference:
-        // size writes are refused while it's minimized.
-        let key = tree.as_ref().unwrap().split_key();
-        assert!(set_split_sizes(&mut tree, &key, &[3.0, 1.0]));
-        let sizes = match tree.as_ref().unwrap() {
-            PaneNode::Split { sizes, .. } => sizes.clone(),
-            _ => panic!("expected split"),
-        };
-        assert_ne!(sizes, vec![3.0, 1.0], "size write applied while minimized");
-        // Restoring brings the pane back and size writes work again.
-        set_minimized(&mut tree, r, false);
-        assert!(set_split_sizes(&mut tree, &key, &[3.0, 1.0]));
-    }
-
-    #[test]
-    fn minimized_round_trips_and_defaults_to_off() {
-        let u = Uuid::new_v4();
-        // Layouts saved before the flag existed load as not-minimized.
-        let json = format!(r#"{{"kind":"leaf","tabs":["{u}"],"active":0}}"#);
-        let mut tree: Option<PaneNode> = Some(serde_json::from_str(&json).unwrap());
-        assert!(!tree.as_ref().unwrap().has_minimized());
-        assert!(set_minimized(&mut tree, u, true));
-        assert!(tree.as_ref().unwrap().is_minimized_leaf());
-        let saved = serde_json::to_string(&tree).unwrap();
-        let reloaded: Option<PaneNode> = serde_json::from_str(&saved).unwrap();
-        assert!(reloaded.as_ref().unwrap().has_minimized());
-    }
-
-    #[test]
-    fn adding_a_tab_reveals_a_minimized_pane() {
-        let (a, b) = (id(), id());
-        let mut tree = Some(hsplit(PaneNode::leaf(a), PaneNode::leaf(b)));
-        set_minimized(&mut tree, b, true);
-        let c = id();
-        assert!(add_tab(&mut tree, b, c));
-        assert!(!tree.as_ref().unwrap().has_minimized());
-    }
-
-    #[test]
-    fn first_shown_instance_skips_minimized_panes() {
-        let (a, b) = (id(), id());
-        let mut tree = Some(hsplit(PaneNode::leaf(a), PaneNode::leaf(b)));
-        assert_eq!(first_shown_instance(&tree), Some(a));
-        assert_eq!(is_minimized(&tree, b), Some(false));
-        set_minimized(&mut tree, a, true);
-        assert_eq!(is_minimized(&tree, a), Some(true));
-        assert_eq!(first_shown_instance(&tree), Some(b));
-        set_minimized(&mut tree, b, true);
-        assert_eq!(first_shown_instance(&tree), None);
     }
 
     #[test]

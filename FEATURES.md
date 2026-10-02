@@ -43,13 +43,6 @@ feature is added or changed, update the matching entry here in the same change**
   remain. While a pane is maximized, selecting another agent (sidebar,
   notification, tray) moves the maximize to it, so that agent comes up full-size
   instead of hiding behind.
-- **Minimize pane** — the inverse of maximize: fold a pane down to just its tab
-  strip while everything in it keeps running (a backend, a long build). The
-  siblings take the freed space and the old layout comes back exactly on restore.
-  Minimized panes are "not up": the arrow navigation and the attention cycler
-  skip them, and `Ctrl+Shift+M` (or the chevron button) toggles the active pane.
-  The state persists across restarts, and all-minimized projects just show the
-  stacked tab strips.
 - **Pane cards** — rounded "card" panes with an accent ring + glow on the active
   pane, hover highlight, and a configurable border style.
 
@@ -445,8 +438,7 @@ feature is added or changed, update the matching entry here in the same change**
   file manager, rename on disk, and open a terminal in that directory.
 - **Drag a file into a pane** — drag any browser row onto a pane and the file's
   path is typed at its prompt (or the editor's caret): relative to the pane's
-  directory when the file lives inside it, absolute otherwise. No enter is sent;
-  dropping on a minimized pane restores it first so the path lands in view.
+  directory when the file lives inside it, absolute otherwise. No enter is sent.
 - **Git marks in the browser** — each row carries its git status: `?` for a file git
   hasn't been told about, `A` staged, `M` modified, `D` deleted, `!` conflicted.
   Folders carry the strongest status beneath them, so a collapsed folder still shows

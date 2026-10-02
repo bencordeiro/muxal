@@ -33,10 +33,9 @@ pub use gui_path::{
     augmented_macos_path_with, newest_node_version_bin_dir,
 };
 pub use pane::{
-    FocusDir, LeafData, PaneNode, SplitDirection, add_tab, add_tab_at, first_shown_instance,
-    focus_in_direction, is_minimized, move_into_split, move_into_tabs, move_pane_beside,
-    move_tab_to, remove, set_active_tab, set_minimized, set_split_sizes, set_tab_order, split,
-    split_beside, swap_instances, swap_panes,
+    FocusDir, LeafData, PaneNode, SplitDirection, add_tab, add_tab_at, focus_in_direction,
+    move_into_split, move_into_tabs, move_pane_beside, move_tab_to, remove, set_active_tab,
+    set_split_sizes, set_tab_order, split, split_beside, swap_instances, swap_panes,
 };
 pub use shell::{join_words, sh_quote, split_words};
 pub use url::{normalize_url, same_resource_url};
@@ -1088,7 +1087,6 @@ pub fn dedupe_instances(workspace: &mut Workspace) {
                         pane_id: Uuid::new_v4(),
                         tabs: vec![id],
                         active: 0,
-                        minimized: false,
                     }))
                 }
             }

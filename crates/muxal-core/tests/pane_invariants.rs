@@ -125,7 +125,6 @@ fn checker_detects_an_empty_leaf() {
                 pane_id: Uuid::new_v4(),
                 tabs: vec![],
                 active: 0,
-                minimized: false,
             }),
         ],
     };
