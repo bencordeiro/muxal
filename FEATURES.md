@@ -438,7 +438,8 @@ feature is added or changed, update the matching entry here in the same change**
   file manager, rename on disk, and open a terminal in that directory.
 - **Drag a file into a pane** — drag any browser row onto a pane and the file's
   path is typed at its prompt (or the editor's caret): relative to the pane's
-  directory when the file lives inside it, absolute otherwise. No enter is sent.
+  directory when the file lives inside it, absolute otherwise. No enter is sent,
+  and dragging never opens the row — opening stays a deliberate plain click.
 - **Git marks in the browser** — each row carries its git status: `?` for a file git
   hasn't been told about, `A` staged, `M` modified, `D` deleted, `!` conflicted.
   Folders carry the strongest status beneath them, so a collapsed folder still shows

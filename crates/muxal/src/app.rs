@@ -13654,16 +13654,17 @@ impl MuxalApp {
                                 cx.new(move |_| DragGhost { label, offset })
                             },
                         )
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            window.listener_for(&entity, move |this, _e, window, cx| {
-                                if is_dir {
-                                    this.toggle_browser_dir(open_abs.clone(), cx);
-                                } else {
-                                    this.open_browser_file(open_abs.clone(), window, cx);
-                                }
-                            }),
-                        )
+                        // Click (press+release, no movement) opens the row —
+                        // deliberately NOT on mouse-down: a press that turns
+                        // into a drag must not also open the file being
+                        // dragged (gpui cancels the click once a drag starts).
+                        .on_click(window.listener_for(&entity, move |this, _e, window, cx| {
+                            if is_dir {
+                                this.toggle_browser_dir(open_abs.clone(), cx);
+                            } else {
+                                this.open_browser_file(open_abs.clone(), window, cx);
+                            }
+                        }))
                         .child(icon)
                         .child(
                             div()
