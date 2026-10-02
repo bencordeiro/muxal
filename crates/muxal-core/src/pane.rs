@@ -721,7 +721,7 @@ pub fn move_into_split(
     // the drop target's branch so untouched panes keep their exact sizes
     // (mirrors move_tab_to).
     transfer_vanishing_leaf_size(tree, &pd, &pt);
-    if !remove(tree, dragged) {
+    if !remove_keep_span(tree, dragged) {
         return false;
     }
     // `split_anchor` is guaranteed to survive: a different leaf, or a sibling that
@@ -969,7 +969,7 @@ pub fn move_tab_to(
     // the destination. Otherwise the remaining siblings absorb that space and
     // the pane the user dropped onto stays roughly its old width.
     transfer_vanishing_leaf_size(tree, &pd, &pt);
-    if !remove(tree, dragged) {
+    if !remove_keep_span(tree, dragged) {
         return false;
     }
     add_tab_at(tree, target_anchor, dragged, index)
@@ -1033,7 +1033,21 @@ fn transfer_vanishing_span(
 /// that tab is removed (and the pane's active index fixed up); if it's the last
 /// tab, the pane is removed and the tree collapses. If it was the last pane, the
 /// tree becomes empty (`None`). Returns `false` if `target` is absent.
+///
+/// When a pane vanishes, its split span folds into the smallest surviving
+/// sibling (ties share it) so untouched panes keep their exact size — closing
+/// a small pane never grows the large one.
 pub fn remove(tree: &mut Option<PaneNode>, target: Uuid) -> bool {
+    remove_impl(tree, target, true)
+}
+
+/// Like [`remove`], but leaves the freed span alone: for move paths that
+/// already routed it to the drop target ([`transfer_vanishing_span`]).
+fn remove_keep_span(tree: &mut Option<PaneNode>, target: Uuid) -> bool {
+    remove_impl(tree, target, false)
+}
+
+fn remove_impl(tree: &mut Option<PaneNode>, target: Uuid, fold_span: bool) -> bool {
     let Some(path) = tree.as_ref().and_then(|r| r.find_path(target)) else {
         return false;
     };
@@ -1064,11 +1078,57 @@ pub fn remove(tree: &mut Option<PaneNode>, target: Uuid) -> bool {
         if path.is_empty() {
             *tree = None;
         } else if let Some(root) = tree.as_mut() {
+            if fold_span {
+                fold_vanishing_span(root, &path);
+            }
             root.remove_at_path(&path);
             root.normalize();
         }
     }
     true
+}
+
+/// Fold the vanishing child's size weight into the smallest surviving
+/// sibling(s) of its split — ties share it equally. Call right before the
+/// child vanishes: without it the vacated span is re-proportioned across
+/// every remaining sibling and untouched panes jump in size (the
+/// already-large pane growing when you close a small one).
+fn fold_vanishing_span(root: &mut PaneNode, path: &[usize]) {
+    let Some((&idx, parent_path)) = path.split_last() else {
+        return;
+    };
+    let Some(PaneNode::Split {
+        children, sizes, ..
+    }) = root.get_at_path_mut(parent_path)
+    else {
+        return;
+    };
+    // Two children dissolve the split — the survivor takes the whole span in
+    // the grandparent, so there is nothing to fold. A misaligned size vector
+    // is normalize()'s business, not ours.
+    if children.len() < 3 || sizes.len() != children.len() {
+        return;
+    }
+    let dead = sizes[idx];
+    let mut min = f32::INFINITY;
+    let mut ties = 0usize;
+    for (i, &w) in sizes.iter().enumerate().take(children.len()) {
+        if i == idx {
+            continue;
+        }
+        if w < min {
+            min = w;
+            ties = 1;
+        } else if w == min {
+            ties += 1;
+        }
+    }
+    let gain = dead / ties as f32;
+    for (i, w) in sizes.iter_mut().enumerate().take(children.len()) {
+        if i != idx && *w == min {
+            *w += gain;
+        }
+    }
 }
 
 /// Swap the positions of two instances wherever they sit (including across tab
@@ -2414,6 +2474,81 @@ mod tests {
         assert_eq!(needed, 1700.0);
         assert!(needed > 1440.0, "must scroll on a laptop");
         assert!(needed < 2560.0, "fits the monitor it was built on");
+    }
+
+    #[test]
+    fn close_folds_the_freed_span_into_the_smallest_pane() {
+        // [big 2][s1 1][s2 1] side by side: closing either small leaves an
+        // even half/half; closing the big shares its span between the two
+        // smalls. The untouched pane never changes size.
+        let (big, s1, s2) = (id(), id(), id());
+        let three = |a: Uuid, b: Uuid, c: Uuid| PaneNode::Split {
+            direction: SplitDirection::Horizontal,
+            sizes: vec![2.0, 1.0, 1.0],
+            children: vec![PaneNode::leaf(a), PaneNode::leaf(b), PaneNode::leaf(c)],
+        };
+        let sizes = |tree: &Option<PaneNode>| match tree.as_ref().unwrap() {
+            PaneNode::Split { sizes, .. } => sizes.clone(),
+            _ => panic!("expected split"),
+        };
+
+        let mut tree = Some(three(big, s1, s2));
+        assert!(remove(&mut tree, s2));
+        assert_eq!(sizes(&tree), vec![2.0, 2.0], "closing the last small");
+
+        let mut tree = Some(three(big, s1, s2));
+        assert!(remove(&mut tree, s1));
+        assert_eq!(sizes(&tree), vec![2.0, 2.0], "closing the middle small");
+
+        let mut tree = Some(three(big, s1, s2));
+        assert!(remove(&mut tree, big));
+        assert_eq!(sizes(&tree), vec![2.0, 2.0], "closing the big one");
+    }
+
+    #[test]
+    fn close_keeps_a_large_pane_the_same_size() {
+        // The "sizes stay put" rule: [big 14][a 3][b 3], close b → a absorbs
+        // the span (14:6) instead of everything re-sharing evenly (10:10).
+        let (big, a, b) = (id(), id(), id());
+        let mut tree = Some(PaneNode::Split {
+            direction: SplitDirection::Horizontal,
+            sizes: vec![14.0, 3.0, 3.0],
+            children: vec![PaneNode::leaf(big), PaneNode::leaf(a), PaneNode::leaf(b)],
+        });
+        assert!(remove(&mut tree, b));
+        match tree.as_ref().unwrap() {
+            PaneNode::Split { sizes, .. } => assert_eq!(sizes, &vec![14.0, 6.0]),
+            _ => panic!("expected split"),
+        }
+    }
+
+    #[test]
+    fn close_in_a_nested_split_leaves_the_other_half_alone() {
+        // [L1 over L2] beside BIG, halves all around: closing L2 dissolves the
+        // left column and L1 inherits its span — BIG stays at exactly half.
+        let (l1, l2, big) = (id(), id(), id());
+        let mut tree = Some(PaneNode::Split {
+            direction: SplitDirection::Horizontal,
+            sizes: vec![1.0, 1.0],
+            children: vec![
+                PaneNode::Split {
+                    direction: SplitDirection::Vertical,
+                    sizes: vec![1.0, 1.0],
+                    children: vec![PaneNode::leaf(l1), PaneNode::leaf(l2)],
+                },
+                PaneNode::leaf(big),
+            ],
+        });
+        assert!(remove(&mut tree, l2));
+        match tree.as_ref().unwrap() {
+            PaneNode::Split {
+                sizes, children, ..
+            } => {
+                assert_eq!(children.len(), 2);
+                assert_eq!(sizes, &vec![1.0, 1.0]);
+            }
+            _ => panic!("expected split"),
+        }
     }
 
     #[test]
