@@ -2420,6 +2420,10 @@ pub struct MuxalApp {
     runner_input: Entity<InputState>,
     /// Whether the first-run Terms acceptance screen is shown.
     show_terms: bool,
+    /// Where keyboard focus goes when an input-holding popup closes: the pane
+    /// that had it when the popup opened. Without the hand-off the popup's
+    /// hidden input keeps focus and swallows typing and pane shortcuts.
+    popup_focus_return: Option<Uuid>,
     /// Ctrl+P search palette (open files / jump to named instances).
     show_search_palette: bool,
     search_input: Entity<InputState>,
@@ -4281,6 +4285,7 @@ impl MuxalApp {
             _resource_timer: resource_timer,
             bounds_save_task: None,
             show_terms,
+            popup_focus_return: None,
             show_search_palette: false,
             search_input,
             search_query: String::new(),
@@ -9016,6 +9021,7 @@ impl MuxalApp {
 
     fn open_search_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.show_search_palette = true;
+        self.popup_focus_return = self.active_instance;
         self.search_selected = 0;
         self.search_input
             .update(cx, |s, cx| s.set_value("", window, cx));
@@ -9031,9 +9037,34 @@ impl MuxalApp {
         cx.notify();
     }
 
-    fn close_search_palette(&mut self, cx: &mut Context<Self>) {
+    fn close_search_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.show_search_palette = false;
+        self.restore_popup_focus(None, window, cx);
         cx.notify();
+    }
+
+    /// Hand keyboard focus back when an input-holding popup closes. Without
+    /// the hand-off the hidden input keeps focus and swallows typing and pane
+    /// shortcuts (the same lesson as the close-instance hand-off).
+    /// `guard`: when given, restore only if that handle still holds focus — a
+    /// pick that already focused a pane or editor keeps it.
+    fn restore_popup_focus(
+        &mut self,
+        guard: Option<FocusHandle>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(handle) = guard
+            && !handle.is_focused(window)
+        {
+            return;
+        }
+        match self.popup_focus_return.take() {
+            Some(iid) if self.workspace.instance(iid).is_some() => {
+                self.focus_instance(iid, window, cx)
+            }
+            _ => self.deselect_pane(window, cx),
+        }
     }
 
     /// Commands offered in the Ctrl+P palette (plus one per runner).
@@ -9221,6 +9252,10 @@ impl MuxalApp {
             }
             SearchItem::RunCommand(cmd) => self.run_palette_command(cmd, window, cx),
         }
+        // Commands that don't move focus leave it on the hidden input — hand
+        // it back to the pane the palette was opened from.
+        let guard = self.search_input.read(cx).focus_handle(cx);
+        self.restore_popup_focus(Some(guard), window, cx);
         cx.notify();
     }
 
@@ -9228,6 +9263,7 @@ impl MuxalApp {
 
     fn open_find_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.show_find_panel = true;
+        self.popup_focus_return = self.active_instance;
         self.find_selected = 0;
         self.find_results.clear();
         self.find_input
@@ -9243,10 +9279,11 @@ impl MuxalApp {
         cx.notify();
     }
 
-    fn close_find_panel(&mut self, cx: &mut Context<Self>) {
+    fn close_find_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.show_find_panel = false;
         // Free the cached file contents.
         self.find_contents = Vec::new();
+        self.restore_popup_focus(None, window, cx);
         cx.notify();
     }
 
@@ -9298,7 +9335,11 @@ impl MuxalApp {
 
     fn activate_find_hit(&mut self, hit: FindHit, window: &mut Window, cx: &mut Context<Self>) {
         self.show_find_panel = false;
+        // Free the cached file contents, as the close path does.
+        self.find_contents = Vec::new();
+        let guard = self.find_input.read(cx).focus_handle(cx);
         let Some(pid) = self.workspace.active_project else {
+            self.restore_popup_focus(Some(guard), window, cx);
             return;
         };
         let target = self.active_instance;
@@ -9307,6 +9348,7 @@ impl MuxalApp {
         {
             ed.update(cx, |e, cx| e.goto_line(hit.line, window, cx));
         }
+        self.restore_popup_focus(Some(guard), window, cx);
         cx.notify();
     }
 
@@ -17284,11 +17326,11 @@ impl MuxalApp {
         palette_backdrop()
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _e, _w, cx| this.close_search_palette(cx)),
+                cx.listener(|this, _e, window, cx| this.close_search_palette(window, cx)),
             )
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
                 match ev.keystroke.key.as_str() {
-                    "escape" => this.close_search_palette(cx),
+                    "escape" => this.close_search_palette(window, cx),
                     "down" => this.move_search_selection(1, cx),
                     "up" => this.move_search_selection(-1, cx),
                     "enter" => this.confirm_search(window, cx),
@@ -17392,11 +17434,11 @@ impl MuxalApp {
         palette_backdrop()
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _e, _w, cx| this.close_find_panel(cx)),
+                cx.listener(|this, _e, window, cx| this.close_find_panel(window, cx)),
             )
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
                 match ev.keystroke.key.as_str() {
-                    "escape" => this.close_find_panel(cx),
+                    "escape" => this.close_find_panel(window, cx),
                     "down" => this.move_find_selection(1, cx),
                     "up" => this.move_find_selection(-1, cx),
                     "enter" => this.confirm_find(window, cx),
