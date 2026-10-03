@@ -12,9 +12,17 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 bin="${MUXAL_EXEC:-$repo_root/target/release/muxal}"
 
+# rustup keeps cargo in ~/.cargo/bin, which is not on PATH in every shell.
+cargo_bin="$(command -v cargo || true)"
+cargo_bin="${cargo_bin:-$HOME/.cargo/bin/cargo}"
+
 if [[ "${1:-}" != "--no-build" && -z "${MUXAL_EXEC:-}" ]]; then
+    if [ ! -x "$cargo_bin" ]; then
+        echo "install-desktop.sh: cargo not found (install rustup: https://rustup.rs)" >&2
+        exit 1
+    fi
     echo "building release binary…" >&2
-    (cd "$repo_root" && cargo build --release -p muxal)
+    (cd "$repo_root" && "$cargo_bin" build --release -p muxal)
 fi
 if [[ ! -x "$bin" ]]; then
     echo "error: $bin not found (build first, or drop --no-build)" >&2

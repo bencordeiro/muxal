@@ -16,12 +16,21 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 dest_dir="${MUXAL_BIN_DIR:-$HOME/.local/bin}"
 dest="$dest_dir/muxal"
 
+# rustup keeps cargo in ~/.cargo/bin, which is not on PATH in every shell —
+# resolve it explicitly so the script works wherever it's run from.
+cargo_bin="$(command -v cargo || true)"
+cargo_bin="${cargo_bin:-$HOME/.cargo/bin/cargo}"
+if [ ! -x "$cargo_bin" ]; then
+    echo "promote.sh: cargo not found (install rustup: https://rustup.rs)" >&2
+    exit 1
+fi
+
 echo "building release binary…" >&2
 # A running main may still hold target/release/muxal (the old launcher pointed
 # there). Unlink it first — the running process keeps its inode — or rustc's
 # write fails with ETXTBSY.
 rm -f "$repo_root/target/release/muxal"
-(cd "$repo_root" && cargo build --release -p muxal)
+(cd "$repo_root" && "$cargo_bin" build --release -p muxal)
 
 mkdir -p "$dest_dir"
 # Copy-then-rename: see install.sh — in-place overwrite of a running binary

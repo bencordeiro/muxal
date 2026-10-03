@@ -22,13 +22,22 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 dev_dir="${MUXAL_DEV_DIR:-$repo_root/.muxal-dev}"
 
+# rustup keeps cargo in ~/.cargo/bin, which is not on PATH in every shell —
+# resolve it explicitly so the script works wherever it's run from.
+cargo_bin="$(command -v cargo || true)"
+cargo_bin="${cargo_bin:-$HOME/.cargo/bin/cargo}"
+if [ ! -x "$cargo_bin" ]; then
+    echo "dev.sh: cargo not found (install rustup: https://rustup.rs)" >&2
+    exit 1
+fi
+
 export XDG_CONFIG_HOME="$dev_dir/config"
 export XDG_DATA_HOME="$dev_dir/data"
 mkdir -p "$XDG_CONFIG_HOME" "$XDG_DATA_HOME"
 
 echo "muxal dev sandbox: $dev_dir" >&2
 if [ "$(uname -s)" != "Darwin" ]; then
-    exec cargo run -p muxal "$@"
+    exec "$cargo_bin" run -p muxal "$@"
 fi
 
 # macOS: split cargo's args from muxal's at the first `--`, as `cargo run` would.
@@ -51,7 +60,7 @@ done
 # report (so `--release` and friends land on the right one). Compiler output
 # still goes to the terminal.
 bin="$(cd "$repo_root" &&
-    cargo build -p muxal ${cargo_args[@]+"${cargo_args[@]}"} \
+    "$cargo_bin" build -p muxal ${cargo_args[@]+"${cargo_args[@]}"} \
         --message-format=json-render-diagnostics |
     sed -n 's/.*"executable":"\([^"]*\)".*/\1/p' | tail -n 1)"
 if [ -z "$bin" ]; then
