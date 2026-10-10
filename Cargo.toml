@@ -48,8 +48,13 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # GPUI/Taffy primitive arithmetic and layout helpers uninlined; sustained
 # terminal output can then spend an entire core recomputing layout. Keep local
 # crates cheap to compile while optimizing third-party layout/rendering code.
+# Line-tables-only debug info: full DWARF made every build/test binary ~1 GB
+# (89% debug sections); this keeps panic lines, backtraces and source-level
+# stepping at ~10x smaller artifacts. Revert to `debug = 2` only if you need
+# in-debugger local-variable inspection.
 [profile.dev]
 opt-level = 1
+debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 3
