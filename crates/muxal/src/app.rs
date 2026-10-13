@@ -1281,10 +1281,11 @@ pub fn register_actions(cx: &mut App) {
         };
         if let Some(app) = weak.upgrade() {
             app.update(cx, |this, cx| {
-                // Quit outright when there's nothing to confirm: the first-run
-                // screens (nothing running yet), or a second Cmd+Q while the
-                // confirm modal is already up — same as clicking its Quit button.
-                if this.show_terms || this.show_workspace_selector || this.show_quit_confirm {
+                // Quit outright when there's nothing to confirm: before a
+                // workspace has been entered (first-run screens, nothing
+                // running yet), or a second Cmd+Q while the confirm modal is
+                // already up — same as clicking its Quit button.
+                if this.current_workspace.is_none() || this.show_quit_confirm {
                     if this.show_quit_confirm {
                         this.kill_checked_tmux_sessions();
                     }
@@ -4344,6 +4345,13 @@ impl MuxalApp {
                 .map(|app| {
                     app.update(cx, |this, cx| {
                         if this.confirm_quit {
+                            return true;
+                        }
+                        // Nothing entered yet (first-run terms / workspace
+                        // selector): close outright — there is nothing running
+                        // to protect, and the confirm modal is not reachable
+                        // from these screens. A workspace entered → prompt.
+                        if this.current_workspace.is_none() {
                             return true;
                         }
                         // Minimize-to-tray: iconify and keep running (the tray is
@@ -21843,7 +21851,11 @@ impl Render for MuxalApp {
                             self.confirm
                                 .is_some()
                                 .then(|| self.render_confirm_modal(cx)),
-                        ),
+                        )
+                        // The quit prompt is reachable from here too (switching
+                        // workspaces with one entered: close asks as normal) —
+                        // it must render on this screen or it is invisible.
+                        .children(self.show_quit_confirm.then(|| self.render_quit_modal(cx))),
                 )
                 .into_any_element();
             return ui_profile::finish_render(ui_profile::RenderView::Main, _render, root);

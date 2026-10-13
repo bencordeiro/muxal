@@ -624,7 +624,10 @@ feature is added or changed, update the matching entry here in the same change**
   to focus the next agent needing attention (blocked, then done), and `Cmd+Q`
   (`Ctrl+Q` elsewhere) to quit from any focus.
 - **Behavior** — immediate-save appearance, confirm destructive actions, quit
-  confirmation, per-kind close confirmation (terminal on, editor/diff off by
+  confirmation (skipped entirely before a workspace has been entered — close the
+  window on the terms/workspace-picker screens and muxal just exits; once you are
+  in a workspace, close asks as normal), per-kind close confirmation (terminal on,
+  editor/diff off by
   default), and auto-close a pane when its process exits **cleanly** (an
   abnormal exit always leaves a tombstone pane instead). The terminal
   confirmation is skipped for an untouched **shell** pane — one sitting idle at
