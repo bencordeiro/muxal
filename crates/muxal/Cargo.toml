@@ -98,7 +98,16 @@ maintainer = "ProjectHax LLC"
 copyright = "2026, ProjectHax LLC"
 section = "utils"
 priority = "optional"
-depends = "$auto"
+# NOT `$auto`: cargo-deb resolves it against the *build host*, and the release
+# builds on Ubuntu 22.04 — whose pre-t64 names (libglib2.0-0, libgtk-3-0) no
+# longer exist on Ubuntu 24.04+/Debian 13, so the .deb refused to install on
+# exactly the systems it targets. Hand-maintained below, with `t64 | old`
+# fallbacks so both package-name generations resolve. Derived from
+# `dpkg-shlibdeps -O -e target/release/muxal` on our built binary (our link
+# line is smaller than a stock desktop app's — no audio/DBus/libstdc++).
+# Nothing regenerates this list: when a native dependency is added, re-run
+# dpkg-shlibdeps and update it here.
+depends = "libc6 (>= 2.35), libgcc-s1 (>= 4.2), libglib2.0-0t64 | libglib2.0-0 (>= 2.65.1), libgtk-3-0t64 | libgtk-3-0 (>= 3.9.10), libjavascriptcoregtk-4.1-0, libsoup-3.0-0 (>= 3.0.3), libwebkit2gtk-4.1-0 (>= 2.35.1), libxcb1 (>= 1.12), libxkbcommon-x11-0 (>= 0.5.0), libxkbcommon0 (>= 0.5.0)"
 extended-description = """\
 muxal is a terminal multiplexer for managing many AI coding agents (Claude, \
 Ollama, and others) across multiple projects, with split panes, tmux/worktree \
