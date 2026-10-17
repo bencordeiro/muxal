@@ -3,6 +3,8 @@
 //! renders the active project's pane tree. Live terminals are kept in
 //! `terminals`, keyed by instance id.
 
+mod handoffs;
+
 use crate::editor::{
     DiskChange, DiskStamp, EditorConfig, EditorView, ExternalChange, read_disk_change,
 };
@@ -26,6 +28,7 @@ use gpui_component::{button::*, *};
 use crate::title_bar::TitleBar;
 use muxal_core::autopilot::{self, AutoAction, AutoContinue, PaneActivity};
 use muxal_core::memory::{self, MemoryEntry};
+use muxal_core::search::ScrollbackSearch;
 use muxal_core::{
     AgentActivity, AgentActivityState, AgentPreset, FocusDir, InjectionMode, Instance,
     InstanceKind, Loop, LoopSchedule, MEMORY_DIR, MEMORY_FILE, PaneNode, PostRunAction, Project,
@@ -676,7 +679,7 @@ fn localized_activity_label(status: AgentStatus, activity: &AgentActivity, now: 
     let word = match word {
         "working" => t("working").to_string(),
         "idle" => t("idle").to_string(),
-        "blocked" => t("blocked").to_string(),
+        "blocked" => t("input").to_string(),
         "done" => t("done").to_string(),
         // New key: catalogs fall back to English until regenerated.
         "stale" => t("stale").to_string(),
@@ -789,7 +792,7 @@ fn default_markers(program: Option<&str>) -> (Vec<String>, Vec<String>) {
 /// Runner and loop prompts are user tasks, so they must remain on the instance
 /// for TypeIn to submit them as the first turn.
 fn take_codex_rules_prompt(instance: &mut Instance, resuming: bool) -> Option<String> {
-    if instance.is_runner {
+    if instance.is_runner || instance.handoff_id.is_some() {
         return None;
     }
     let prompt = instance
@@ -837,6 +840,24 @@ mod codex_prompt_transport_tests {
         let launch = resolve_launch_for_session(&instance, false);
         assert_eq!(launch.startup_input.as_deref(), Some("one-shot task"));
         assert!(launch.submit);
+    }
+
+    #[test]
+    fn codex_handoff_stays_a_submitted_turn_and_is_consumed_after_launch() {
+        let mut instance = codex("Read the reviewed handoff", false);
+        instance.handoff_id = Some(Uuid::new_v4());
+        assert_eq!(take_codex_rules_prompt(&mut instance, false), None);
+        assert_eq!(
+            resolve_launch_for_session(&instance, false)
+                .startup_input
+                .as_deref(),
+            Some("Read the reviewed handoff")
+        );
+        assert!(instance.consume_handoff_prompt());
+        assert_eq!(
+            resolve_launch_for_session(&instance, false).startup_input,
+            None
+        );
     }
 
     #[test]
@@ -933,7 +954,7 @@ fn status_label(status: Option<AgentStatus>) -> &'static str {
     match status {
         Some(AgentStatus::Working) => "working",
         Some(AgentStatus::Idle) => "idle",
-        Some(AgentStatus::Blocked) => "blocked",
+        Some(AgentStatus::Blocked) => "input",
         Some(AgentStatus::Done) => "done",
         None => "not started",
     }
@@ -2422,6 +2443,7 @@ pub struct MuxalApp {
     snippets_menu: Option<Point<Pixels>>,
     /// The runner whose run-dialog is open (index into `runners`).
     active_runner: Option<usize>,
+    handoff_ui: handoffs::HandoffUi,
     /// Whether the run-dialog (collect details) is shown.
     show_run_dialog: bool,
     /// Detail-text editor for the run-dialog (main window).
@@ -2472,11 +2494,10 @@ enum SearchItem {
     RunCommand(PaletteCommand),
 }
 
-/// Active terminal-scrollback search: the searching pane's match lines (buffer
-/// line indices, oldest→newest) and the current index.
+/// One pane's scrollback search and the last buffer generation scanned.
 struct TermSearch {
-    matches: Vec<i32>,
-    idx: usize,
+    search: ScrollbackSearch,
+    generation: u64,
 }
 
 /// An app action runnable from the Ctrl+P palette.
@@ -2496,6 +2517,7 @@ enum PaletteCommand {
     OpenMemory,
     RunRunner(usize),
     SendSnippet(usize),
+    Handoff,
 }
 
 /// The live view backing a pane — a terminal, a code editor, or a browser. Lets
@@ -4263,6 +4285,7 @@ impl MuxalApp {
             loops_menu: None,
             snippets_menu: None,
             active_runner: None,
+            handoff_ui: handoffs::HandoffUi::new(window, cx),
             show_run_dialog: false,
             runner_input,
             notifications_enabled: settings.notifications_enabled,
@@ -4643,6 +4666,12 @@ impl MuxalApp {
             && project.is_some()
             && let Some(data_dir) = muxal_store::data_dir()
         {
+            if inst
+                .and_then(|instance| instance.tmux_session.as_ref())
+                .is_none()
+            {
+                crate::session_binding::clear_pi_input_binding(&data_dir, instance_id);
+            }
             if let Some(ext) = crate::session_binding::pi_binding_extension(&data_dir) {
                 resolved.args.push("--extension".to_string());
                 resolved.args.push(ext);
@@ -4982,6 +5011,21 @@ impl MuxalApp {
             started,
         } = meta;
         let _phase = ui_profile::phase("activation", "install-terminal-spawn", Some(instance_id));
+        // A replacement PTY invalidates search coordinates even when the
+        // persisted instance UUID stays the same (automatic resume recovery).
+        let return_search_focus = self
+            .term_search
+            .as_ref()
+            .is_some_and(|state| state.search.instance() == instance_id)
+            && self
+                .term_search_input
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window);
+        self.clear_term_search_for(instance_id, cx);
+        if return_search_focus {
+            self.deselect_pane(window, cx);
+        }
         let launch = match result {
             Ok(launch) => launch,
             Err(error) => {
@@ -5011,7 +5055,7 @@ impl MuxalApp {
         let font_family: SharedString = self.settings.font_family.clone().into();
         let font_size = self.settings.font_size * self.settings.zoom;
         let mouse_mode = TerminalMouseMode::from_setting(&self.settings.terminal_mouse);
-        let view = cx.new(move |cx| {
+        let view = cx.new(|cx| {
             let mut view = TerminalView::new_with_focus_observer(
                 launch,
                 instance_id,
@@ -5049,9 +5093,15 @@ impl MuxalApp {
             inst.auto_submit = false;
             state_changed = true;
         }
+        if let Some(inst) = self.workspace.instance_mut(instance_id) {
+            state_changed |= inst.consume_handoff_prompt();
+        }
         state_changed |= self.mark_terminal_session_started(instance_id);
         if state_changed {
             self.persist();
+        }
+        if return_search_focus {
+            self.focus_instance_with_attendance(instance_id, false, window, cx);
         }
         cx.notify();
     }
@@ -5503,10 +5553,18 @@ impl MuxalApp {
             cx.notify();
             return;
         }
+        if self.handoff_ui.is_open() {
+            self.close_handoff(window, cx);
+            if self.handoff_ui.is_open() {
+                return;
+            }
+        }
         // Replacing the handle drops the previous workspace's lock, freeing it for
         // another process to open.
         self.workspace_lock = Some(lock);
 
+        self.handoff_ui.reset();
+        self.clear_term_search(cx);
         self.failed_launches.clear();
         // Invalidate background launches from the old workspace before ids from
         // the new document can be admitted.
@@ -5756,6 +5814,9 @@ impl MuxalApp {
         }
         // Leaving a remote project with a pending layout change → flush it now so
         // the remote copy is current even if we don't return for a while.
+        if self.workspace.active_project != Some(pid) {
+            self.clear_term_search(cx);
+        }
         self.workspace.active_project = Some(pid);
         // Adopt the project's default preset as the current selection.
         if let Some(def) = self.workspace.project(pid).and_then(|p| p.default_preset)
@@ -5797,7 +5858,12 @@ impl MuxalApp {
     /// Move keyboard focus to `next` in the window showing `pid`, for call sites
     /// with no `&mut Window` in scope (exit/loop auto-closes). Without this the
     /// closed pane's dangling focus handle keeps swallowing keystrokes.
-    fn refocus_in_shown_window(&mut self, next: Uuid, pid: Option<Uuid>, cx: &mut Context<Self>) {
+    fn refocus_in_shown_window(
+        &mut self,
+        next: Option<Uuid>,
+        pid: Option<Uuid>,
+        cx: &mut Context<Self>,
+    ) {
         let handle = self
             .secondary_windows
             .iter()
@@ -5810,7 +5876,11 @@ impl MuxalApp {
         let entity = cx.entity();
         let _ = win.update(cx, move |_root, window, app| {
             entity.update(app, |this, cx| {
-                this.focus_instance(next, window, cx);
+                if let Some(next) = next {
+                    this.focus_instance(next, window, cx);
+                } else {
+                    this.deselect_pane(window, cx);
+                }
             });
         });
     }
@@ -5855,6 +5925,13 @@ impl MuxalApp {
     ) {
         let _phase = ui_profile::phase("workspace", "focus-pane", Some(iid));
         ui_profile::focus_action(reason, Some(iid), window);
+        if self
+            .term_search
+            .as_ref()
+            .is_some_and(|state| state.search.instance() != iid)
+        {
+            self.clear_term_search(cx);
+        }
         self.active_instance = Some(iid);
         if attend {
             // Deliberately selecting a pane clears its pending notification.
@@ -6709,6 +6786,9 @@ impl MuxalApp {
     /// Poll the per-pane pi binding records — written by the bundled pi
     /// extension on every in-pane conversation switch.
     fn sync_pi_session_ids(&mut self, cx: &mut Context<Self>) {
+        let Some(data_dir) = muxal_store::data_dir() else {
+            return;
+        };
         let candidates: Vec<(Uuid, PathBuf)> = self
             .workspace
             .instances
@@ -6728,6 +6808,23 @@ impl MuxalApp {
         let mut changed = false;
         for (iid, cwd) in candidates {
             changed |= self.adopt_pi_session_binding(iid, &cwd);
+            let required = crate::session_binding::pi_input_required(
+                &data_dir,
+                iid,
+                &cwd,
+                self.workspace
+                    .instance(iid)
+                    .and_then(|instance| instance.session_id.as_deref()),
+            );
+            if let Some(view) = self.terminals.get(&iid) {
+                changed |= view.update(cx, |view, cx| {
+                    let changed = view.set_input_required(required);
+                    if changed {
+                        cx.notify();
+                    }
+                    changed
+                });
+            }
         }
         if changed {
             cx.notify();
@@ -6932,6 +7029,7 @@ impl MuxalApp {
         // quit shortly after `/resume` is unlikely to persist the old binding.
         self.sync_claude_session_ids(cx);
         self.sync_pi_session_ids(cx);
+        self.poll_handoffs(cx);
         self.sync_grok_session_ids(cx);
         let focused = self.active_instance;
         // A `--resume` launch has this long to prove its saved session is valid;
@@ -7390,6 +7488,7 @@ impl MuxalApp {
         self.exit_logged.retain(|iid| live.contains(iid));
         self.reconnecting.retain(|iid, _| live.contains(iid));
         self.auto.retain(|iid, _| live.contains(iid));
+        dirty |= self.refresh_term_search_matches(cx);
         // Auto-continue: nudge armed panes whose agent has stalled with work left.
         self.tick_auto_continue(cx);
         if dirty {
@@ -8600,6 +8699,7 @@ impl MuxalApp {
             || self.show_keys
             || self.show_terms
             || self.show_workspace_selector
+            || self.handoff_ui.is_open()
             || self.show_run_dialog
             || self.broadcasting
             || self.git_modal.is_some()
@@ -9102,6 +9202,12 @@ impl MuxalApp {
         if self.workspace.active_project.is_some() {
             cmds.push(OpenMemory);
         }
+        if self
+            .active_instance
+            .is_some_and(|iid| self.handoff_available(iid))
+        {
+            cmds.push(Handoff);
+        }
         cmds.extend((0..self.runners.len()).map(RunRunner));
         // Snippets target the focused pane, so only offer them when one is a live
         // terminal ready to receive typed text.
@@ -9116,6 +9222,7 @@ impl MuxalApp {
 
     fn palette_command_label(&self, cmd: PaletteCommand) -> String {
         match cmd {
+            PaletteCommand::Handoff => t("Agent handoff…").into(),
             PaletteCommand::SplitRight => t("Split pane right").into(),
             PaletteCommand::SplitDown => t("Split pane down").into(),
             PaletteCommand::NewTab => t("New tab").into(),
@@ -9148,6 +9255,11 @@ impl MuxalApp {
         cx: &mut Context<Self>,
     ) {
         match cmd {
+            PaletteCommand::Handoff => {
+                if let Some(iid) = self.active_instance {
+                    self.open_handoff(iid, window, cx);
+                }
+            }
             PaletteCommand::SplitRight => self.add_agent(SplitDirection::Horizontal, window, cx),
             PaletteCommand::SplitDown => self.add_agent(SplitDirection::Vertical, window, cx),
             PaletteCommand::NewTab => self.new_tab(window, cx),
@@ -9646,6 +9758,7 @@ impl MuxalApp {
         cx: &mut Context<Self>,
     ) {
         ui_profile::unregister_focus_pane(iid);
+        self.clear_term_search_for(iid, cx);
         // Invalidate a PTY still being created. Its eventual result sees the
         // missing token, drops, and kills the child instead of becoming invisible.
         self.terminal_launching.remove(&iid);
@@ -9714,12 +9827,16 @@ impl MuxalApp {
             // handle whose element is gone (FocusHandle::drop only unrefs it), so
             // the dead pane's handle would swallow every shortcut — arrows
             // included — until the user clicked a live pane again.
-            if let Some(next) = self.active_instance {
-                match window {
-                    Some(window) => self.focus_instance(next, window, cx),
-                    // Exit/loop auto-closes run without a window in scope.
-                    None => self.refocus_in_shown_window(next, pid, cx),
+            match window {
+                Some(window) => {
+                    if let Some(next) = self.active_instance {
+                        self.focus_instance(next, window, cx);
+                    } else {
+                        self.deselect_pane(window, cx);
+                    }
                 }
+                // Exit/loop auto-closes run without a window in scope.
+                None => self.refocus_in_shown_window(self.active_instance, pid, cx),
             }
         }
         self.persist();
@@ -11491,6 +11608,7 @@ impl MuxalApp {
         let Some(pid) = self.workspace.instance(iid).map(|i| i.project_id) else {
             return;
         };
+        self.clear_term_search_for(iid, cx);
         // Remember the original spot before removing, so Dock lands it back here.
         let redock = compute_redock_anchor(
             &self.workspace.project(pid).and_then(|p| p.layout.clone()),
@@ -11516,6 +11634,11 @@ impl MuxalApp {
         self.maximized = maximize_anchor_after_leave(self.maximized, &max_group, &[iid]);
         if self.active_instance == Some(iid) {
             self.active_instance = self.workspace.active().and_then(|p| p.first_instance());
+            if let Some(next) = self.active_instance {
+                self.focus_instance(next, window, cx);
+            } else {
+                self.deselect_pane(window, cx);
+            }
         }
 
         let title = self
@@ -12037,6 +12160,7 @@ impl MuxalApp {
         }
         let recorded_session = inst.tmux_session.clone();
         muxal_store::append_event_log(&format!("restart: \"{}\" [{iid}]", inst.display_name()));
+        self.clear_term_search_for(iid, cx);
         self.terminal_launching.remove(&iid);
         self.failed_launches.remove(&iid);
         if let Some(view) = self.terminals.remove(&iid) {
@@ -12241,6 +12365,8 @@ impl MuxalApp {
     fn clear_terminal_scrollback(&mut self, iid: Uuid, cx: &mut Context<Self>) {
         if let Some(view) = self.terminals.get(&iid) {
             view.read(cx).session().clear_scrollback();
+            view.update(cx, |_, cx| cx.notify());
+            self.refresh_term_search_matches(cx);
             cx.notify();
         }
     }
@@ -12273,15 +12399,20 @@ impl MuxalApp {
         if !is_term {
             return;
         }
+        let Some(iid) = self.active_instance else {
+            return;
+        };
+        let Some(session) = self.active_session(cx) else {
+            return;
+        };
+        self.clear_term_search(cx);
+        session.set_search("");
         self.term_search = Some(TermSearch {
-            matches: Vec::new(),
-            idx: 0,
+            search: ScrollbackSearch::new(iid),
+            generation: session.content_generation(),
         });
         self.term_search_input
             .update(cx, |s, cx| s.set_value("", window, cx));
-        if let Some(session) = self.active_session(cx) {
-            session.set_search("");
-        }
         let handle = self.term_search_input.read(cx).focus_handle(cx);
         window.focus(&handle, cx);
         self.notify_active_terminal(cx);
@@ -12290,51 +12421,92 @@ impl MuxalApp {
 
     /// Recompute matches for `query`, highlight, and jump to the newest match.
     fn refresh_term_search(&mut self, query: &str, cx: &mut Context<Self>) {
-        let Some(session) = self.active_session(cx) else {
+        let Some(state) = self.term_search.as_mut() else {
             return;
         };
+        let Some(view) = self.terminals.get(&state.search.instance()).cloned() else {
+            return;
+        };
+        let session = view.read(cx).session();
         session.set_search(query);
         let matches = session.search_match_lines(query);
-        let idx = matches.len().saturating_sub(1); // newest match
-        if let Some(&line) = matches.get(idx) {
+        if let Some(line) = state.search.set_query(query, matches) {
             session.scroll_to_line(line);
         }
-        self.term_search = Some(TermSearch { matches, idx });
-        self.notify_active_terminal(cx);
+        state.generation = session.content_generation();
+        view.update(cx, |_, cx| cx.notify());
         cx.notify();
+    }
+
+    /// Refresh only when the buffer changed. Output, reflow and clearing history
+    /// all invalidate relative line coordinates; scrolling itself never jumps to
+    /// a result here, so a streaming pane cannot yank the viewport away.
+    fn refresh_term_search_matches(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(state) = self.term_search.as_mut() else {
+            return false;
+        };
+        let Some(view) = self.terminals.get(&state.search.instance()) else {
+            self.term_search = None;
+            return true;
+        };
+        let session = view.read(cx).session();
+        let generation = session.content_generation();
+        if state.generation == generation {
+            return false;
+        }
+        let changed = state
+            .search
+            .refresh(session.search_match_lines(state.search.query()));
+        state.generation = generation;
+        changed
     }
 
     /// Step to another match (delta -1 = older/up, +1 = newer/down), scrolling it
     /// into view. Wraps.
     fn term_search_step(&mut self, delta: i32, cx: &mut Context<Self>) {
-        let line = {
-            let Some(ts) = self.term_search.as_mut() else {
-                return;
-            };
-            if ts.matches.is_empty() {
-                return;
-            }
-            let n = ts.matches.len() as i32;
-            ts.idx = (ts.idx as i32 + delta).rem_euclid(n) as usize;
-            ts.matches[ts.idx]
+        self.refresh_term_search_matches(cx);
+        let Some(state) = self.term_search.as_mut() else {
+            return;
         };
-        if let Some(session) = self.active_session(cx) {
+        if let Some(line) = state.search.step(delta)
+            && let Some(view) = self.terminals.get(&state.search.instance())
+        {
+            let session = view.read(cx).session();
             session.scroll_to_line(line);
+            state.generation = session.content_generation();
+            view.update(cx, |_, cx| cx.notify());
         }
-        self.notify_active_terminal(cx);
         cx.notify();
+    }
+
+    /// Clear the original session even if another pane has since been selected.
+    fn clear_term_search(&mut self, cx: &mut Context<Self>) {
+        if let Some(state) = self.term_search.take()
+            && let Some(view) = self.terminals.get(&state.search.instance())
+        {
+            view.read(cx).session().set_search("");
+            view.update(cx, |_, cx| cx.notify());
+        }
+    }
+
+    fn clear_term_search_for(&mut self, iid: Uuid, cx: &mut Context<Self>) {
+        if self
+            .term_search
+            .as_ref()
+            .is_some_and(|state| state.search.instance() == iid)
+        {
+            self.clear_term_search(cx);
+        }
     }
 
     /// Close the search bar, clear the highlight, and refocus the terminal.
     fn close_term_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(session) = self.active_session(cx) {
-            session.set_search("");
-        }
-        self.term_search = None;
+        self.clear_term_search(cx);
         if let Some(iid) = self.active_instance {
             self.focus_instance(iid, window, cx);
+        } else {
+            self.deselect_pane(window, cx);
         }
-        self.notify_active_terminal(cx);
         cx.notify();
     }
 
@@ -14275,6 +14447,17 @@ impl MuxalApp {
                                 }),
                             ),
                     )
+                    .children(self.handoff_available(iid).then(|| {
+                        Button::new(SharedString::from(format!("handoff-{sid}")))
+                            .ghost()
+                            .with_size(sz)
+                            .label(self.handoff_button_label(iid))
+                            .selected(self.handoff_ready(iid))
+                            .tooltip(t("Prepare or review a handoff to a fresh agent pane"))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.open_handoff(iid, window, cx);
+                            }))
+                    }))
                     // Agent panes get an auto-continue toggle and a "show git diff"
                     // button; diff panes get a "refresh" button instead.
                     .children((kind == InstanceKind::Terminal).then(|| {
@@ -14521,6 +14704,7 @@ impl MuxalApp {
                             // Right-click: per-tab menu.
                             .context_menu({
                                 let entity = entity.clone();
+                                let handoff_available = self.handoff_available(tab);
                                 // Snippet (idx, name) pairs captured for the submenu.
                                 let snippets: Vec<(usize, SharedString)> = self
                                     .snippets
@@ -14578,6 +14762,18 @@ impl MuxalApp {
                                                     },
                                                 )),
                                         )
+                                    } else {
+                                        menu
+                                    };
+                                    let menu = if handoff_available {
+                                        menu.item(PopupMenuItem::new(t("Agent handoff…")).on_click(
+                                            window.listener_for(
+                                                &entity,
+                                                move |this, _, window, cx| {
+                                                    this.open_handoff(tab, window, cx);
+                                                },
+                                            ),
+                                        ))
                                     } else {
                                         menu
                                     };
@@ -19757,10 +19953,11 @@ impl MuxalApp {
 
     /// The floating terminal-search bar (shown while `term_search` is Some).
     fn render_term_search_bar(&self, cx: &mut Context<Self>) -> AnyElement {
-        let count = match &self.term_search {
-            Some(ts) if !ts.matches.is_empty() => format!("{}/{}", ts.idx + 1, ts.matches.len()),
-            _ => "0/0".to_string(),
-        };
+        let (index, total) = self
+            .term_search
+            .as_ref()
+            .map_or((0, 0), |state| state.search.position());
+        let count = format!("{index}/{total}");
         div()
             .absolute()
             .top(px(52.0))
@@ -20581,6 +20778,16 @@ impl MuxalApp {
                     &t("Desktop notifications"),
                 ),
             )
+            .child(self.check_row(
+                Checkbox::new("b-handoffs")
+                    .checked(self.settings.handoffs_enabled)
+                    .on_click(cx.listener(|this, c: &bool, _w, cx| {
+                        this.settings.handoffs_enabled = *c;
+                        this.persist_settings();
+                        cx.notify();
+                    })),
+                &t("Enable manual agent handoffs (prepare, review, then start a fresh pane)"),
+            ))
             .child(
                 self.check_row(
                     Checkbox::new("b-browser")
@@ -22150,6 +22357,7 @@ impl Render for MuxalApp {
                     .then(|| self.render_snippets_menu(cx)),
             )
             .children(self.show_run_dialog.then(|| self.render_run_dialog(cx)))
+            .children(self.handoff_ui.is_open().then(|| self.render_handoff(cx)))
             // A pane-scoped confirm belongs to the window showing that pane; when
             // that's a project window on another monitor, it draws there instead.
             .children(

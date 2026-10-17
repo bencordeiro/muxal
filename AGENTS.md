@@ -12,7 +12,7 @@ emulator running a PTY child process.
 
 ## Architecture
 
-Cargo workspace, four crates (depend downward only):
+Cargo workspace, five crates (depend downward only):
 
 - `crates/muxal-core` — the **pure** domain model: the pane layout tree
   (`PaneNode`, `pane.rs`), worktree naming, agent presets (`AgentPreset`), tmux
@@ -35,6 +35,8 @@ Cargo workspace, four crates (depend downward only):
   embedded assets (icons, themes) wired up in `main.rs`. The old `stt` / `tts` /
   `update` / `control` / `secrets` modules were removed — no speech, in-app
   updater, outside-control, or keychain code lives here anymore.
+- `crates/muxal-tray` — platform tray backends and their data-only menu model;
+  the app supplies localized labels and handles navigation/quit actions.
 
 `ios/` — a separate **Swift/SwiftUI iOS companion app**, intentionally kept
 as-is. It is **not** a cargo crate — the `cargo` gate does not build it. It
@@ -87,6 +89,10 @@ track the desktop code. See `ios/README.md`.
   session files once they have content — empty `/new` sessions must survive
   restarts), but the bound cwd must match the instance's directory. Don't
   tighten this without re-testing the empty-session case.
+  The extension also reports blocking prompt lifecycle events in a separate
+  `.json.input` runtime file, checked against both the bound session id and cwd.
+  After changing the extension, run
+  `node --experimental-strip-types scripts/test-pi-session-binding.mjs` as well.
 - **GPUI patterns** — render builds an element tree with `div()…`; handlers use
   `cx.listener(|this, ev, window, cx| …)`; the terminal is a custom `Element`
   (manual layout/paint). Mouse `on_drag_move` fires for all listeners — guard with
@@ -183,7 +189,8 @@ change should reach their local install:
 
 1. Run the gates above, then GUI-test with `scripts/dev.sh` — sandboxed, never
    touches the real workspace, and coexists with the user's running main.
-2. `scripts/promote.sh` — release-builds and atomically swaps
+2. **Wait for the user to test dev and explicitly approve promotion.** Then
+   `scripts/promote.sh` release-builds and atomically swaps
    `~/.local/bin/muxal` (copy-then-rename, safe while main runs).
 3. **Never kill or restart the user's running muxal yourself** — they may be
    working inside it. Tell them the new binary takes effect on their next
@@ -247,21 +254,45 @@ add a new `##` category if none fits).
 
 ## Where things stand (update this section when it changes)
 
-As of **v0.5.3** (tag `d085e84`, promoted to `~/.local/bin/muxal`):
+As of **v0.5.4** (user-tested in dev; release authorized):
 
-- **Unreleased on `master`** since the tag: the `.deb` install fix for current
-  Ubuntu/Debian (hand-maintained depends) and terminal query replies on the PTY
-  reader thread. Both fully gated and verified — they ride along in the next
-  release. Nothing else is in progress.
+- **Release content:** manual agent handoffs, the compact sidebar **input** label
+  and Pi prompt lifecycle binding, terminal search ownership/stale-match fixes,
+  immediate history-clear repaint, live focus after pane close/detach, timely
+  terminal query replies, and the `.deb` dependency fix for current Ubuntu/Debian.
+  Handoffs and bug fixes are fully gated; all 548 Rust tests pass. The user
+  verified handoffs in dev, including full-text delivery and transfer-file cleanup.
+- **Release preparation:** bump to v0.5.4, publish `master` + annotated tag,
+  verify all published checksums and the Linux binary version, then promote using
+  `scripts/promote.sh`. The user authorized this release and its normal ritual;
+  never restart or kill their running main.
 - **Passed on / parked — do not re-propose without being asked:** the tmux
   survival layer (tmux isn't even installed on this machine; the user isn't
   interested), layout presets, cursor-flicker work, startup-delay audit, and
   all macOS extras (app menu, notifications) — the user runs macOS and says it
-  works fine.
+  works fine. The attention inbox is also declined; the user prefers the compact
+  sidebar status for requests needing a response.
 - **Upstream** (`ProjectHax/muxel`) is watched for **ideas only** (last checked
   2026-10: 77 commits across v0.2.5–v0.3.1; its remote/Windows/iOS bulk is
   irrelevant to this local-only fork). Findings are distilled into `IDEAS.md`.
-- Backlog lives in `IDEAS.md` (spider map `sketched`, attention inbox,
-  cross-pane scrollback search, worktree board, day timeline, cost meter, …).
+- **Manual agent handoffs** are complete in v0.5.4 (developed on
+  `dev/agent-handoffs`):
+  opt-in prepare/review/start buttons (Settings → Behavior), full reviewed text
+  sent directly in a fresh recipient's opening prompt, same source directory/
+  worktree, and one-shot input. Source transfer files are temporary: after capture
+  and a durable save, the review lives in workspace.json and transfers are deleted.
+  Cleanup also handles cancellation, late files, and earlier orphaned transfers;
+  old receiving panes retain referenced files until closed. Handoff logic is in
+  `muxal-core::handoff`, documents in `muxal-store::handoff`, UI in
+  `app/handoffs.rs`. Never trigger or chain handoffs automatically. **Complete:**
+  the user verified direct-text delivery in dev and cleanup was confirmed for
+  their exact test request; all 548 Rust tests, real Pi input verification, and
+  sandbox launch gates passed. **Future changes still require explicit user
+  approval before promotion.**
+- **Next feature direction:** the user wants the Spider map soon, but explicitly
+  outside the upcoming handoff release. Do not start it until asked.
+- Cross-pane scrollback search is also declined; don't re-propose it unasked.
+- Backlog lives in `IDEAS.md` (spider map `sketched`, worktree board,
+  day timeline, cost meter, …).
 - The user drives versioning: patch releases when enough has landed (v0.5.2 =
   three changes, v0.5.3 = one fix), tested in `scripts/dev.sh` before shipping.

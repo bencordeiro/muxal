@@ -300,7 +300,11 @@ pub(crate) fn pi_session_id_from_binding(
     _home: &Path,
     cwd: &Path,
 ) -> Option<String> {
-    let raw = std::fs::read(pi_binding_path(data_dir, instance_id)).ok()?;
+    read_pi_binding(&pi_binding_path(data_dir, instance_id), cwd).map(|(id, _)| id)
+}
+
+fn read_pi_binding(path: &Path, cwd: &Path) -> Option<(String, Value)> {
+    let raw = std::fs::read(path).ok()?;
     let value: Value = serde_json::from_slice(&raw).ok()?;
     let session_id = value.get("session_id")?.as_str()?;
     if session_id.is_empty()
@@ -315,7 +319,33 @@ pub(crate) fn pi_session_id_from_binding(
     if !paths_loosely_equal(wrote_cwd, cwd) {
         return None;
     }
-    Some(session_id.to_string())
+    Some((session_id.to_string(), value))
+}
+
+fn pi_input_binding_path(data_dir: &Path, instance_id: Uuid) -> PathBuf {
+    data_dir
+        .join(PI_BINDING_DIR)
+        .join(format!("{instance_id}.json.input"))
+}
+
+/// Runtime prompt state is separate from the consumable session-switch record.
+/// Accept it only for this pane's bound conversation and directory.
+pub(crate) fn pi_input_required(
+    data_dir: &Path,
+    instance_id: Uuid,
+    cwd: &Path,
+    session_id: Option<&str>,
+) -> bool {
+    read_pi_binding(&pi_input_binding_path(data_dir, instance_id), cwd).is_some_and(
+        |(id, value)| {
+            session_id == Some(id.as_str())
+                && value.get("waiting_for_input").and_then(Value::as_bool) == Some(true)
+        },
+    )
+}
+
+pub(crate) fn clear_pi_input_binding(data_dir: &Path, instance_id: Uuid) {
+    let _ = std::fs::remove_file(pi_input_binding_path(data_dir, instance_id));
 }
 
 pub(crate) fn clear_pi_binding(data_dir: &Path, instance_id: Uuid) {
@@ -371,6 +401,52 @@ mod tests {
         assert_eq!(pi_session_id_from_binding(&dir, iid, &home, &cwd), None);
         clear_pi_binding(&dir, iid);
         assert_eq!(pi_session_id_from_binding(&dir, iid, &home, &cwd), None);
+    }
+
+    #[test]
+    fn pi_input_state_is_scoped_to_its_pane_directory_and_conversation() {
+        let dir = temp_dir();
+        let iid = Uuid::new_v4();
+        let cwd = dir.join("project");
+        let path = pi_input_binding_path(&dir, iid);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        for waiting in [true, false] {
+            std::fs::write(
+                &path,
+                serde_json::json!({
+                    "session_id": "empty-new-session",
+                    "cwd": cwd,
+                    "waiting_for_input": waiting,
+                })
+                .to_string(),
+            )
+            .unwrap();
+            assert_eq!(
+                pi_input_required(&dir, iid, &cwd, Some("empty-new-session")),
+                waiting,
+            );
+            assert!(!pi_input_required(&dir, iid, &cwd, Some("old-session")));
+            assert!(!pi_input_required(
+                &dir,
+                iid,
+                &dir,
+                Some("empty-new-session")
+            ));
+            assert!(!pi_input_required(
+                &dir,
+                Uuid::new_v4(),
+                &cwd,
+                Some("empty-new-session")
+            ));
+        }
+        clear_pi_input_binding(&dir, iid);
+        assert!(!pi_input_required(
+            &dir,
+            iid,
+            &cwd,
+            Some("empty-new-session")
+        ));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     fn temp_dir() -> PathBuf {

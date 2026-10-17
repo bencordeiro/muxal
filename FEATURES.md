@@ -178,20 +178,20 @@ feature is added or changed, update the matching entry here in the same change**
 
 ## Agent status
 
-- **Real lifecycle badges** — each pane shows **working**, **idle**, **blocked**,
+- **Real lifecycle badges** — each pane shows **working**, **idle**, **input**,
   or **done**, color-coded (blue / gray / amber / green) on the tab pill, sidebar
   icon, dashboard, and notification dots. A marker-based agent whose turn finishes
   is held at **done** until the agent works again — even if it never rang the bell —
   and that completion survives a muxal restart. Focusing the pane marks its
   notification read without rewriting lifecycle state or age. Sidebar badges include
-  coarse age while work is blocked or done, show recent idle activity briefly
+  coarse age while work needs input or is done, show recent idle activity briefly
   (`idle · 12m`), omit ordinary middle age, and call out panes idle for three days
   or more (`stale · 4d`). Long pane titles ellipsize before the badge instead of
   pushing status out of the sidebar. Title-derived lifecycle and automatic-name
   updates on known agent panes are accepted only from that provider's semantic
   title shape; existing marker, bell, and process-exit signals still apply.
   Provider-owned screen rows can add precise state that titles omit: Claude
-  permission forms report **blocked**, while positive background counts displayed
+  permission forms report **input**, while positive background counts displayed
   by Claude and Grok remain **working** even when their titles look idle. Claude's
   visible foreground progress row also preserves **working** when a narrow tmux
   pane truncates the usual interrupt marker. Brief
@@ -200,6 +200,15 @@ feature is added or changed, update the matching entry here in the same change**
   from its session index by the pane's captured session UUID, so child commands
   such as `npm` cannot replace the session name or forge a title-derived state
   transition.
+- **Input needed** — the compact amber **input** badge means the agent is waiting
+  for you: a recognized permission/approval prompt, an interactive question form,
+  or a provider's explicit action-required signal. Click its sidebar row to open
+  the pane and respond; the badge stays until the request clears. Ordinary
+  questions in a finished prose reply still show **done** unless the agent emits
+  a recognizable input-required signal. Pi versions exposing prompt lifecycle
+  events report blocking extension dialogs (permissions, selections, text inputs,
+  and custom question UIs) through muxal's bundled extension; the badge clears
+  when the dialog closes, without scraping the prompt text.
 - **Per-agent detection markers** — status is inferred from on-screen TUI markers
   (e.g. Claude's "esc to interrupt" spinner, a permission prompt), with built-in
   defaults per agent and **editable working/blocked markers per preset**.
@@ -268,6 +277,37 @@ feature is added or changed, update the matching entry here in the same change**
   startup to reach auto-accept mode.
 - **Ephemeral + restore-safe** — on app restore a runner re-types its prompt but
   does not auto-submit.
+
+## Agent handoffs
+
+- **Manual prepare → review → start** — opt in under Settings → Behavior, then
+  click **Handoff** in an agent pane (also in its tab menu and command palette).
+  **Ask agent to prepare** sends a summary request to the source; use an idle
+  agent with an empty input. Optional direction describes what the recipient
+  should do. Preparing turns off Auto for the source pane.
+- **Review before continuing** — the source writes a Markdown summary of goals,
+  decisions, changes, tests, open problems, and next steps. The pane shows
+  **Review** when the complete document arrives. Edit it, save it for later,
+  and choose an installed receiving agent (the source preset is the default).
+  **Start with handoff** explicitly opens a fresh conversation beside the source
+  in the same directory/worktree, regardless of the new-worktree toggle. The
+  source stays open; handoffs never trigger or chain automatically.
+- **Full text in the opening prompt** — the receiving agent gets the entire
+  reviewed summary directly, with no handoff file to read. Markdown/code
+  formatting is preserved with bracketed paste; programs without it receive one
+  message with line breaks flattened. The opening prompt is consumed on launch
+  and never resubmitted on restart.
+- **Temporary transfer, durable review** — the source uses a temporary transfer
+  file in Muxal's workspace data directory. Once the complete summary is captured
+  and saved in the normal workspace document, Muxal deletes its transfer files.
+  Pending reviews and edits survive restart without separate Markdown files.
+  Cancelled/completed/orphaned transfers are cleaned up too, including files
+  written after cancellation. Existing files needed by a receiving pane from the
+  earlier file-based implementation remain until that pane closes.
+- **Verified source** — each request has a unique completion marker; incomplete
+  or mismatched files cannot become ready. A changed bound session or working
+  directory requires a new request. Cancelling forgets the request without
+  interrupting the source agent.
 
 ## Snippets
 
@@ -376,7 +416,10 @@ feature is added or changed, update the matching entry here in the same change**
   content (tmux mouse mode is turned on automatically for tmux-backed panes).
 - **Scrollback search** — `Ctrl+Shift+F` (while a terminal is focused) opens a
   search bar that highlights matches and jumps through them (Enter / ↑ / ↓),
-  scanning the full history.
+  scanning the full history. The search belongs to that terminal: selecting a
+  different pane/project, restarting, closing or detaching it clears the search
+  and its highlights. Match counts refresh as output changes, and navigation
+  uses current positions after scrolling, resizing or clearing history.
 - **Clickable links** — `Ctrl`/`Cmd`+click opens what's under the cursor: an
   `http(s)` URL, an OSC 8 hyperlink (e.g. `ls --hyperlink` or agent markdown
   links), a literal Markdown inline link, a `file://` URI, or a **file path**
@@ -391,6 +434,8 @@ feature is added or changed, update the matching entry here in the same change**
   terminal link opens link actions instead of copying or pasting through the PTY.
 - **Focus reporting** — forwards focus in/out to the PTY (DECSET 1004) so agents
   know when their pane is active.
+- **Focus after closing** — closing the last tab returns keyboard focus to muxal,
+  so shortcuts still work on an empty project, including after a clean auto-exit.
 - **OSC-52 clipboard** — programs in the terminal (tmux-backed panes included) can
   copy to the system clipboard via `OSC 52`; clipboard *reads* are answered with
   an empty reply, so a program can probe for support but never see your clipboard.

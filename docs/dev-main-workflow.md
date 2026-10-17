@@ -46,7 +46,8 @@ parallel instances use **dev** (sandboxed), below.
    delete the dir to reset first-run.
 5. **Compare side by side:** leave main open and dev open at once — allowed,
    they're separate workspaces.
-6. **Ship it to main:** `scripts/promote.sh` — release-builds the tree and
+6. **After the user tests dev and explicitly approves promotion, ship it to main:**
+   `scripts/promote.sh` — release-builds the tree and
    atomically swaps `~/.local/bin/muxal`. Then **quit and relaunch main** to
    run the new binary (the running process keeps the old inode). The launcher
    entry needs no update; its Exec path is stable.
@@ -94,7 +95,8 @@ parallel instances use **dev** (sandboxed), below.
 
 Same loop as above, with two extra safety rules (also in `AGENTS.md`):
 
-1. Gates → `scripts/dev.sh` GUI-test → `scripts/promote.sh` → tell the user to
+1. Gates → `scripts/dev.sh` GUI-test → explicit user approval →
+   `scripts/promote.sh` → tell the user to
    restart main. **Never kill/restart the user's running muxal yourself** —
    they may be working inside it; the promoted binary takes effect on their
    next restart.

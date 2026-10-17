@@ -6,6 +6,8 @@
 //! file is simpler and just as durable as a database here; this module is the
 //! seam to swap in SQLite later if querying/scale ever demands it.
 
+pub mod handoff;
+
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use muxal_core::{Settings, Uuid, WindowGeom, Workspace, WorkspaceMeta, WorkspacesIndex};

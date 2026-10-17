@@ -553,7 +553,13 @@ pub fn resolve_launch_for_session(instance: &Instance, resuming: bool) -> Resolv
             InjectionMode::TypeIn if !resuming => {
                 // A raw newline is Enter in TUIs without bracketed-paste mode.
                 // Keep the instruction bundle to one startup turn everywhere.
-                startup_input = Some(prompt.split_whitespace().collect::<Vec<_>>().join(" "));
+                startup_input = Some(if instance.handoff_inline {
+                    // The terminal transport preserves Markdown inside bracketed
+                    // paste and safely flattens line breaks for older programs.
+                    prompt.clone()
+                } else {
+                    prompt.split_whitespace().collect::<Vec<_>>().join(" ")
+                });
             }
             InjectionMode::TypeIn => {}
             InjectionMode::None => {}

@@ -891,6 +891,8 @@ pub struct TerminalView {
     /// On-screen markers that classify the agent's status (per-agent).
     working_markers: Vec<String>,
     blocked_markers: Vec<String>,
+    /// Exact, app-supplied prompt state from a per-pane provider binding.
+    input_required: bool,
     title_provider: TitleProvider,
     /// Latches `Done` from a working→finished transition so a completed turn shows
     /// Done (and notifies) even when the agent didn't ring the bell. `prev_raw` is
@@ -1255,7 +1257,7 @@ impl TerminalView {
                 }
                 if let Some(input) = startup_input {
                     timer(PRE_TYPE_MS).await;
-                    session.paste(&input);
+                    session.paste_startup_input(&input);
                     profile::startup_event(
                         instance_id,
                         &automation_program,
@@ -1411,6 +1413,7 @@ impl TerminalView {
             has_visible_content: false,
             working_markers,
             blocked_markers,
+            input_required: false,
             title_provider,
             prev_raw: std::cell::Cell::new(None),
             done_latch: std::cell::Cell::new(false),
@@ -1432,6 +1435,15 @@ impl TerminalView {
 
     pub fn session(&self) -> &Arc<TerminalSession> {
         &self.session
+    }
+
+    pub fn set_input_required(&mut self, required: bool) -> bool {
+        if self.input_required == required {
+            return false;
+        }
+        self.input_required = required;
+        self.status_cache.set(None);
+        true
     }
 
     pub fn exited(&self) -> bool {
@@ -1487,6 +1499,9 @@ impl TerminalView {
     /// bell, output activity, and process exit (see [`classify`]). Agents with no
     /// markers fall back to the bell + activity heuristic.
     pub fn status(&self) -> AgentStatus {
+        if self.input_required && !self.exited {
+            return AgentStatus::Blocked;
+        }
         // Cache against content gen so sidebar/tick don't re-scan the grid every
         // frame while the agent is idle. Bell and idle-time still force a recheck.
         let content_gen = self.session.content_generation();

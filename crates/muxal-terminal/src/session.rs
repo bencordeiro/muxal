@@ -860,7 +860,7 @@ impl TerminalSession {
 
     /// Current content generation — advances on any grid/selection/scroll/search
     /// change that should invalidate the cached draw list.
-    pub(crate) fn content_generation(&self) -> u64 {
+    pub fn content_generation(&self) -> u64 {
         self.content_gen.load(Ordering::Relaxed)
     }
 
@@ -947,6 +947,12 @@ impl TerminalSession {
             text.replace("\r\n", "\r").replace('\n', "\r")
         };
         self.write_input(payload.as_bytes());
+    }
+
+    /// Send one startup message. Markdown is preserved when the application
+    /// supports bracketed paste; otherwise line breaks cannot act as Enter.
+    pub(crate) fn paste_startup_input(&self, text: &str) {
+        self.write_input(startup_paste_payload(text, self.is_bracketed_paste()).as_bytes());
     }
 
     /// Paste filesystem paths into the PTY (drag-drop / clipboard files).
@@ -2539,6 +2545,38 @@ mod windows_spawn_resolve {
     }
 }
 
+fn startup_paste_payload(text: &str, bracketed: bool) -> String {
+    let text = text.replace('\x1b', "");
+    if bracketed {
+        format!("\x1b[200~{text}\x1b[201~")
+    } else {
+        text.replace("\r\n", "\n").replace(['\r', '\n', '\t'], " ")
+    }
+}
+
+#[cfg(test)]
+mod startup_paste_tests {
+    use super::startup_paste_payload;
+
+    #[test]
+    fn markdown_stays_intact_inside_one_bracketed_paste() {
+        let text = "# Handoff\n\n```\n    Run(\"two  spaces\");\n```";
+        assert_eq!(
+            startup_paste_payload(text, true),
+            format!("\x1b[200~{text}\x1b[201~")
+        );
+    }
+
+    #[test]
+    fn without_bracketed_paste_internal_newlines_cannot_submit_messages() {
+        let text = "line one\r\n\tline two\n    code";
+        assert_eq!(
+            startup_paste_payload(text, false),
+            "line one  line two     code"
+        );
+    }
+}
+
 // These tests spawn `/bin/sh` and `/bin/cat`, so they are Unix-only.
 #[cfg(all(test, unix))]
 mod tests {
@@ -2546,6 +2584,58 @@ mod tests {
     use alacritty_terminal::grid::Dimensions;
     use alacritty_terminal::index::{Column, Line, Point as GridPoint};
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn large_multiline_startup_prompt_reaches_the_pty_in_one_paste() {
+        let (session, rx) = TerminalSession::spawn(
+            CommandSpec::program(
+                "/bin/sh",
+                vec![
+                    "-c".into(),
+                    "stty raw -echo; printf '\\033[?2004hREADY'; exec cat".into(),
+                ],
+            ),
+            80,
+            24,
+        )
+        .expect("spawn");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut ready = Vec::new();
+        while !ready.windows(5).any(|w| w == b"READY") {
+            assert!(Instant::now() < deadline, "PTY never became ready");
+            if let Ok(PtyChunk::Output(bytes)) = rx.try_recv() {
+                session.process_output(&bytes);
+                ready.extend(bytes);
+            } else {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+        assert!(session.is_bracketed_paste());
+        let summary = "# Context\n\n```csharp\n    Run(\"two  spaces\");\n```\n".repeat(4096);
+        let expected = format!("\x1b[200~{summary}\x1b[201~");
+        session.paste_startup_input(&summary);
+        let mut received = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while received.len() < expected.len() {
+            assert!(
+                Instant::now() < deadline,
+                "received {} of {} bytes",
+                received.len(),
+                expected.len()
+            );
+            if let Ok(PtyChunk::Output(bytes)) = rx.try_recv() {
+                received.extend(bytes);
+            } else {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+        session.kill();
+        assert_eq!(
+            received,
+            expected.as_bytes(),
+            "the full handoff must arrive without truncation or extra Enters"
+        );
+    }
 
     /// A dropped/pasted filename must be shell-quoted so it lands as an inert
     /// argument and can't run when the user hits Enter. Regression for the
@@ -2743,6 +2833,36 @@ mod tests {
         let tail = session.recent_text(3);
         assert!(!tail.contains("line 1"), "{tail:?}");
         assert!(tail.contains("日本 done"), "{tail:?}");
+        session.kill();
+    }
+
+    #[test]
+    fn search_navigation_refreshes_after_output_and_history_clear() {
+        use muxal_core::search::ScrollbackSearch;
+
+        let (session, _rx) =
+            TerminalSession::spawn(CommandSpec::program("/bin/cat", vec![]), 80, 3).expect("spawn");
+        session.process_output(b"TARGET\r\none\r\ntwo\r\n");
+        let mut search = ScrollbackSearch::new(uuid::Uuid::new_v4());
+        assert_eq!(
+            search.set_query("TARGET", session.search_match_lines("TARGET")),
+            Some(-1)
+        );
+        let generation = session.content_generation();
+
+        session.process_output(b"three\r\n");
+        assert_ne!(session.content_generation(), generation);
+        search.refresh(session.search_match_lines(search.query()));
+        assert_eq!(search.step(-1), Some(-2));
+        session.scroll_to_line(search.selected_line().unwrap());
+        assert_eq!(session.grid_metrics().1, 2);
+
+        let generation = session.content_generation();
+        session.clear_scrollback();
+        assert_ne!(session.content_generation(), generation);
+        search.refresh(session.search_match_lines(search.query()));
+        assert_eq!(search.step(-1), None);
+        assert_eq!(search.position(), (0, 0));
         session.kill();
     }
 

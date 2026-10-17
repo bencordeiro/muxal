@@ -9,9 +9,11 @@ pub mod autopilot;
 pub mod diff;
 pub mod geometry;
 mod gui_path;
+pub mod handoff;
 pub mod locale;
 pub mod memory;
 mod pane;
+pub mod search;
 mod shell;
 pub mod tmux;
 pub mod update;
@@ -536,6 +538,13 @@ pub struct Instance {
     /// Created by a runner (one-off task launcher).
     #[serde(default)]
     pub is_runner: bool,
+    /// Reviewed handoff used to start this conversation; also marks one-shot input.
+    #[serde(default)]
+    pub handoff_id: Option<Uuid>,
+    /// Full handoff text is in the opening prompt. False preserves older panes
+    /// that may still need their handoff file until they close.
+    #[serde(default)]
+    pub handoff_inline: bool,
     /// Press Enter to submit after typing the startup prompt. New instances set
     /// this true; a runner clears it after its first launch so reopening the app
     /// re-types the prompt but does NOT auto-submit it (defaults false for
@@ -590,9 +599,24 @@ impl Instance {
 
     /// A duplicated pane copies launch settings, not the source conversation.
     pub fn reset_conversation_for_duplicate(&mut self) {
+        self.consume_handoff_prompt();
+        self.handoff_id = None;
+        self.handoff_inline = false;
         self.session_id = None;
         self.session_started = false;
         self.auto_name = None;
+    }
+
+    /// Clear the opening handoff after a successful launch, including for agents
+    /// without resume support. Restarting must never resubmit it.
+    pub fn consume_handoff_prompt(&mut self) -> bool {
+        if self.handoff_id.is_some() && self.system_prompt.is_some() {
+            self.system_prompt = None;
+            self.auto_submit = false;
+            true
+        } else {
+            false
+        }
     }
 
     /// A plain shell instance.
@@ -627,6 +651,8 @@ impl Instance {
             worktree_branch: None,
             auto_mode_presses: 0,
             is_runner: false,
+            handoff_id: None,
+            handoff_inline: false,
             // New instances submit their startup prompt; persisted ones default
             // to false (so restored runners re-type without auto-submitting).
             auto_submit: true,
@@ -689,6 +715,8 @@ impl Instance {
             worktree_branch: None,
             auto_mode_presses: 0,
             is_runner: false,
+            handoff_id: None,
+            handoff_inline: false,
             auto_submit: false,
             pinned: false,
             worktree_id: None,
@@ -803,6 +831,9 @@ mod project_focus_tests {
 /// The full set of projects + instance metadata. Serializable for persistence.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Workspace {
+    /// Outstanding, explicitly requested handoffs. Documents live in workspace data.
+    #[serde(default)]
+    pub handoffs: Vec<handoff::HandoffRequest>,
     pub projects: Vec<Project>,
     pub active_project: Option<Uuid>,
     pub instances: Vec<Instance>,
@@ -954,6 +985,7 @@ impl Workspace {
 
     pub fn remove_instance_meta(&mut self, id: Uuid) {
         self.instances.retain(|i| i.id != id);
+        self.handoffs.retain(|request| request.source != id);
     }
 
     pub fn worktree(&self, id: Uuid) -> Option<&Worktree> {
@@ -1156,7 +1188,10 @@ pub fn sync_agent_injection_modes(workspace: &mut Workspace, presets: &[AgentPre
         };
         // Runner prompts are one-shot tasks, not reusable capability rules.
         // Their explicit TypeIn transport must survive preset migrations.
-        if !instance.is_runner && instance.injection != preset.injection {
+        if !instance.is_runner
+            && instance.handoff_id.is_none()
+            && instance.injection != preset.injection
+        {
             instance.injection = preset.injection.clone();
             changed = true;
         }
@@ -1548,6 +1583,9 @@ pub struct Settings {
     /// links open in the system default browser.
     #[serde(default = "default_true")]
     pub browser_enabled: bool,
+    /// Manual prepare/review/start handoff controls (opt in).
+    #[serde(default)]
+    pub handoffs_enabled: bool,
     /// Close a pane automatically when its process exits.
     #[serde(default = "default_true")]
     pub close_on_exit: bool,
@@ -1855,6 +1893,7 @@ impl Default for Settings {
             default_use_worktree: false,
             notifications_enabled: true,
             browser_enabled: true,
+            handoffs_enabled: false,
             close_on_exit: true,
             confirm_close_terminal: true,
             confirm_close_editor: false,

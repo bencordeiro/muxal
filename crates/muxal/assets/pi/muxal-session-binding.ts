@@ -19,15 +19,32 @@ export default function (pi: {
 
 	let read: () => string | undefined = () => undefined;
 	let last = "";
+	let openPrompts = 0;
+	const inputTarget = `${target}.input`;
+	const writeInput = () => {
+		try {
+			const id = read();
+			if (!id) return;
+			const tmp = `${inputTarget}.${process.pid}.tmp`;
+			writeFileSync(tmp, JSON.stringify({
+				session_id: id,
+				cwd: process.cwd(),
+				waiting_for_input: openPrompts > 0,
+			}));
+			renameSync(tmp, inputTarget);
+		} catch {
+			// Status reporting must never interfere with answering a prompt.
+		}
+	};
 
 	const write = () => {
 		try {
 			const id = read();
 			if (!id || id === last) return;
-			last = id;
 			const tmp = `${target}.${process.pid}.tmp`;
 			writeFileSync(tmp, JSON.stringify({ session_id: id, cwd: process.cwd() }));
 			renameSync(tmp, target);
+			last = id;
 		} catch {
 			// Bookkeeping must never disturb the session.
 		}
@@ -41,7 +58,24 @@ export default function (pi: {
 				return undefined;
 			}
 		};
+		openPrompts = 0;
 		write();
+		writeInput();
+	});
+
+	// Pi emits these for blocking extension dialogs (including custom question
+	// UIs). Never infer a question from the agent's prose or output inactivity.
+	pi.on("ui_prompt_start", () => {
+		openPrompts++;
+		writeInput();
+	});
+	pi.on("ui_prompt_end", () => {
+		openPrompts = Math.max(0, openPrompts - 1);
+		writeInput();
+	});
+	pi.on("session_shutdown", () => {
+		openPrompts = 0;
+		writeInput();
 	});
 
 	// Switches and forks complete after these fire; the matching session_start
