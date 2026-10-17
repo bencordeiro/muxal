@@ -6,9 +6,10 @@
 //! the bytes through the VTE `Processor` into the `Term` (see `process_output`),
 //! so the `Term` is only ever touched from the GPUI thread.
 
-use crate::colors::{TerminalPalette, index_to_rgb};
+use crate::colors::TerminalPalette;
 use crate::listener::{MuxalListener, SharedWriter};
 use crate::profile;
+use crate::replies::{ImmediateReplies, Replies};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{
@@ -677,7 +678,8 @@ impl TerminalSession {
         // parent's copy so the reader sees EOF when the child exits.
 
         let palette = Arc::new(Mutex::new(TerminalPalette::default()));
-        let reply_writer = writer.clone();
+        let replies = Arc::new(Replies::new(writer.clone()));
+        let reply_replies = replies.clone();
         let reply_palette = palette.clone();
         let profile_reads =
             tx.carries_timing() && instance_id.is_some() && crate::profile::is_enabled();
@@ -688,7 +690,7 @@ impl TerminalSession {
                     reader,
                     child,
                     tx,
-                    reply_writer,
+                    reply_replies,
                     reply_palette,
                     profile_reads,
                 )
@@ -702,7 +704,7 @@ impl TerminalSession {
         let bell = Arc::new(AtomicBool::new(false));
         let clipboard_store = Arc::new(Mutex::new(Vec::new()));
         let listener = MuxalListener {
-            writer: writer.clone(),
+            replies: replies.clone(),
             title: title.clone(),
             title_generation: title_generation.clone(),
             title_changed_at: title_changed_at.clone(),
@@ -712,13 +714,7 @@ impl TerminalSession {
         };
 
         let term = Term::new(
-            // Allow OSC-52 *reads* to reach the listener too — it answers them
-            // with an empty reply (see `MuxalListener`) instead of alacritty's
-            // default silent deny, so probing TUIs don't hang.
-            TermConfig {
-                osc52: Osc52::CopyPaste,
-                ..TermConfig::default()
-            },
+            term_config(),
             &TermSize::new(cols as usize, rows as usize),
             listener,
         );
@@ -1972,112 +1968,15 @@ impl Drop for TerminalSession {
 /// crosses the async channel to GPUI. Querying TUIs briefly switch the tty into
 /// a response-reading mode; a reply generated later by the UI drain can arrive
 /// after that mode ends and become visible prompt input.
-struct ImmediateColorQueries {
-    state: OscScanState,
-    body: Vec<u8>,
-    writer: SharedWriter,
-    palette: Arc<Mutex<TerminalPalette>>,
-}
-
-#[derive(Clone, Copy, Default)]
-enum OscScanState {
-    #[default]
-    Ground,
-    Escape,
-    Osc,
-    OscEscape,
-}
-
-#[derive(Clone, Copy)]
-enum OscTerminator {
-    Bell,
-    StringTerminator,
-}
-
-impl ImmediateColorQueries {
-    const MAX_BODY: usize = 1024;
-
-    fn new(writer: SharedWriter, palette: Arc<Mutex<TerminalPalette>>) -> Self {
-        Self {
-            state: OscScanState::Ground,
-            body: Vec::new(),
-            writer,
-            palette,
-        }
-    }
-
-    fn advance(&mut self, bytes: &[u8]) {
-        for &byte in bytes {
-            self.state = match (self.state, byte) {
-                (OscScanState::Ground, 0x1b) => OscScanState::Escape,
-                (OscScanState::Escape, b']') => {
-                    self.body.clear();
-                    OscScanState::Osc
-                }
-                (OscScanState::Escape, 0x1b) => OscScanState::Escape,
-                (OscScanState::Osc, 0x07) => {
-                    self.answer(OscTerminator::Bell);
-                    OscScanState::Ground
-                }
-                (OscScanState::Osc, 0x9c) => {
-                    self.answer(OscTerminator::StringTerminator);
-                    OscScanState::Ground
-                }
-                (OscScanState::Osc, 0x1b) => OscScanState::OscEscape,
-                (OscScanState::Osc, 0x18 | 0x1a) => OscScanState::Ground,
-                (OscScanState::Osc, byte) if self.body.len() < Self::MAX_BODY => {
-                    self.body.push(byte);
-                    OscScanState::Osc
-                }
-                (OscScanState::Osc, _) => {
-                    self.body.clear();
-                    OscScanState::Ground
-                }
-                (OscScanState::OscEscape, b'\\') => {
-                    self.answer(OscTerminator::StringTerminator);
-                    OscScanState::Ground
-                }
-                (OscScanState::OscEscape, 0x18 | 0x1a) => OscScanState::Ground,
-                (OscScanState::OscEscape, _) => OscScanState::Ground,
-                _ => OscScanState::Ground,
-            };
-        }
-    }
-
-    fn answer(&mut self, terminator: OscTerminator) {
-        let Ok(body) = std::str::from_utf8(&self.body) else {
-            return;
-        };
-        let Some(request) = body.strip_suffix(";?") else {
-            return;
-        };
-        let (prefix, index) = match request {
-            "10" => ("10".to_string(), 256),
-            "11" => ("11".to_string(), 257),
-            "12" => ("12".to_string(), 258),
-            _ => {
-                let Some(index) = request.strip_prefix("4;").and_then(|s| s.parse().ok()) else {
-                    return;
-                };
-                (request.to_string(), index)
-            }
-        };
-        let Some(rgb) = index_to_rgb(&self.palette.lock(), index) else {
-            return;
-        };
-        let end = match terminator {
-            OscTerminator::Bell => "\x07",
-            OscTerminator::StringTerminator => "\x1b\\",
-        };
-        let reply = format!(
-            "\x1b]{prefix};rgb:{r:02x}{r:02x}/{g:02x}{g:02x}/{b:02x}{b:02x}{end}",
-            r = rgb.r,
-            g = rgb.g,
-            b = rgb.b,
-        );
-        let mut writer = self.writer.lock();
-        let _ = writer.write_all(reply.as_bytes());
-        let _ = writer.flush();
+/// The terminal config both parsers share: the reader-thread reply parser and
+/// alacritty's `Term` must agree on which queries get a reply at all. OSC-52
+/// *reads* are enabled so they reach the reply path, which answers with an
+/// empty reply (see `replies`) instead of alacritty's default silent deny, so
+/// probing TUIs don't hang.
+pub(crate) fn term_config() -> TermConfig {
+    TermConfig {
+        osc52: Osc52::CopyPaste,
+        ..TermConfig::default()
     }
 }
 
@@ -2088,12 +1987,12 @@ fn read_loop(
     mut reader: Box<dyn Read + Send>,
     mut child: Box<dyn Child + Send + Sync>,
     tx: PtyChunkSender,
-    writer: SharedWriter,
+    replies: Arc<Replies>,
     palette: Arc<Mutex<TerminalPalette>>,
     profile_reads: bool,
 ) {
     let mut buf = [0u8; 65536];
-    let mut color_queries = ImmediateColorQueries::new(writer, palette);
+    let mut immediate = ImmediateReplies::new(replies, palette, &term_config());
     // Only a clean EOF or a real error ends the session. EINTR is a signal
     // interruption, not an exit — retrying it keeps a healthy pane from being
     // torn down. Any other error is recorded so the app can log/show it.
@@ -2108,7 +2007,7 @@ fn read_loop(
                     read_sequence = read_sequence.wrapping_add(1).max(1);
                     profile::pty_read(n, read_sequence)
                 });
-                color_queries.advance(&buf[..n]);
+                immediate.advance(&buf[..n]);
                 if !tx.send_output(buf[..n].to_vec(), timing) {
                     // Receiver dropped — UI is gone. Still fall through to reap
                     // the child, or it lingers as a zombie.
@@ -2640,51 +2539,6 @@ mod windows_spawn_resolve {
     }
 }
 
-#[cfg(test)]
-mod immediate_color_tests {
-    use super::*;
-
-    fn responder() -> (
-        ImmediateColorQueries,
-        std::sync::mpsc::Receiver<QueuedWrite>,
-    ) {
-        let (tx, rx) = std::sync::mpsc::channel();
-        let writer: SharedWriter =
-            Arc::new(Mutex::new(Box::new(ChannelWriter { tx, profile: false })));
-        let palette = Arc::new(Mutex::new(TerminalPalette {
-            background: 0x112233,
-            ..Default::default()
-        }));
-        (ImmediateColorQueries::new(writer, palette), rx)
-    }
-
-    #[test]
-    fn color_query_is_answered_immediately_across_reader_chunks() {
-        let (mut responder, rx) = responder();
-        responder.advance(b"\x1b]11;");
-        assert!(rx.try_recv().is_err());
-        responder.advance(b"?\x07");
-        assert_eq!(rx.recv().unwrap().bytes, b"\x1b]11;rgb:1111/2222/3333\x07");
-    }
-
-    #[test]
-    fn indexed_query_preserves_index_and_string_terminator() {
-        let (mut responder, rx) = responder();
-        responder.advance(b"\x1b]4;1;?\x1b\\");
-        assert_eq!(
-            rx.recv().unwrap().bytes,
-            b"\x1b]4;1;rgb:f3f3/8b8b/a8a8\x1b\\"
-        );
-    }
-
-    #[test]
-    fn ordinary_osc_title_does_not_write_to_the_pty() {
-        let (mut responder, rx) = responder();
-        responder.advance(b"\x1b]0;Review changes\x07");
-        assert!(rx.try_recv().is_err());
-    }
-}
-
 // These tests spawn `/bin/sh` and `/bin/cat`, so they are Unix-only.
 #[cfg(all(test, unix))]
 mod tests {
@@ -2918,19 +2772,24 @@ mod tests {
     }
 
     /// OSC-52 read probe: answered with a well-formed EMPTY reply — support is
-    /// detectable, but the clipboard never leaks to the child. The needle is the
-    /// reply's printable core: the tty echoes control chars in caret notation
-    /// (`ESC` → `^[`, `BEL` → `^G`), so the raw bytes never appear verbatim.
-    /// Emptiness is the listener's contract (`format("")`); what's asserted here
-    /// is that a reply reaches the PTY at all.
+    /// detectable, but the clipboard never leaks to the child. The query comes
+    /// from the child, since the PTY reader thread is what answers it. The
+    /// needle is the reply as the tty echoes it, control chars in caret
+    /// notation (`ESC` → `^[`, `BEL` → `^G`): nothing between `c;` and the
+    /// terminator, and unlike the raw query the child printed.
     #[test]
     fn osc52_load_answers_empty() {
-        let (session, rx) =
-            TerminalSession::spawn(CommandSpec::program("/bin/cat", vec![]), 80, 24)
-                .expect("spawn");
-        session.process_output(b"\x1b]52;c;?\x07");
+        let (session, rx) = TerminalSession::spawn(
+            CommandSpec::program(
+                "/bin/sh",
+                vec!["-c".into(), "printf '\\033]52;c;?\\007'; exec cat".into()],
+            ),
+            80,
+            24,
+        )
+        .expect("spawn");
         assert!(
-            wait_for_reply(&rx, b"]52;c;"),
+            wait_for_reply(&rx, b"^[]52;c;^G"),
             "empty OSC-52 reply should reach the PTY"
         );
         session.kill();
