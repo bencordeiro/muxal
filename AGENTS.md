@@ -254,7 +254,7 @@ add a new `##` category if none fits).
 
 ## Where things stand (update this section when it changes)
 
-As of **v0.5.4** (user-tested in dev; release authorized):
+As of **v0.5.4** (tag `d1a01a4`, published and promoted):
 
 - **Release content:** manual agent handoffs, the compact sidebar **input** label
   and Pi prompt lifecycle binding, terminal search ownership/stale-match fixes,
@@ -262,10 +262,14 @@ As of **v0.5.4** (user-tested in dev; release authorized):
   terminal query replies, and the `.deb` dependency fix for current Ubuntu/Debian.
   Handoffs and bug fixes are fully gated; all 548 Rust tests pass. The user
   verified handoffs in dev, including full-text delivery and transfer-file cleanup.
-- **Release preparation:** bump to v0.5.4, publish `master` + annotated tag,
-  verify all published checksums and the Linux binary version, then promote using
-  `scripts/promote.sh`. The user authorized this release and its normal ritual;
-  never restart or kill their running main.
+- **Release verified:** `master` and annotated `v0.5.4` are pushed; all native
+  release builds and regular CI checks passed. All ten published package checksums
+  are OK (zero failures). The downloaded Linux binary reports v0.5.4; macOS bundle
+  versions and the `.deb` t64 alternatives were checked too. GitHub release notes
+  include Added, Fixed, Development, and the full comparison link.
+- **Local main:** promoted using `scripts/promote.sh`; the installed binary
+  reports v0.5.4. The user's running main still needs their own restart to switch;
+  never restart or kill it yourself. No feature work is currently in progress.
 - **Passed on / parked — do not re-propose without being asked:** the tmux
   survival layer (tmux isn't even installed on this machine; the user isn't
   interested), layout presets, cursor-flicker work, startup-delay audit, and
@@ -290,7 +294,7 @@ As of **v0.5.4** (user-tested in dev; release authorized):
   sandbox launch gates passed. **Future changes still require explicit user
   approval before promotion.**
 - **Next feature direction:** the user wants the Spider map soon, but explicitly
-  outside the upcoming handoff release. Do not start it until asked.
+  after v0.5.4, outside this release. Do not start it until asked.
 - Cross-pane scrollback search is also declined; don't re-propose it unasked.
 - Backlog lives in `IDEAS.md` (spider map `sketched`, worktree board,
   day timeline, cost meter, …).
