@@ -30,4 +30,6 @@ cargo build -p muxal
 
 `AGENTS.md` documents the workspace layout and project conventions. Keep pure,
 testable logic in `muxal-core`, and add a `FEATURES.md` entry when you add or
-change a user-facing feature.
+change a user-facing feature. When you add or change UI strings, run
+`python3 scripts/translate.py --extract-only` to sync the translation catalogs
+(CI checks them).

@@ -71,8 +71,8 @@ launch: right-click → Open, or
 `xattr -dr com.apple.quarantine /Applications/muxal.app`. Windows is
 intentionally not packaged — support is being phased out.
 
-Tracked-but-unfixed issues (currently: terminal glyph spacing on Arch Linux)
-live in [docs/known-issues.md](docs/known-issues.md).
+Tracked issues and their state live in
+[docs/known-issues.md](docs/known-issues.md).
 
 ## Under the hood
 

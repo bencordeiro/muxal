@@ -83,8 +83,9 @@ parallel instances use **dev** (sandboxed), below.
 - The dev sandbox has its own first-run dialog, settings, and window geometry
   (under `.muxal-dev/`). On Linux, dev *panes* keep your real `HOME`, so agents
   inside them stay logged in; on macOS `dev.sh` sandboxes `HOME` too.
-- Don't probe the GUI binary with CLI flags — `muxal --version` doesn't exist
-  and will boot a full GUI against your real workspace.
+- Don't probe the GUI binary with CLI flags — `--version` is the only safe one
+  (`muxal --version` prints and exits); anything else boots a full GUI against
+  your real workspace.
 - Release packages for other machines (`.deb` / `.rpm` / AppImage / `.tar.gz`)
   come from the release workflow; they install their own copy independent of
   this repo's `target/` tree.
