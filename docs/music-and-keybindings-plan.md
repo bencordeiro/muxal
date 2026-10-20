@@ -1,11 +1,11 @@
-# Keybindings cleanup and optional music — draft plan
+# Keybindings cleanup and optional music — completed plan
 
-Status: implemented on `dev/music-keybindings`, awaiting human review,
+Status: released and promoted as v0.5.6 after user review and authorization,
 2026-10-20. The user declined searchable categories/search UI. Keybindings keep
 compact friendly rows, Modified only, per-row resets, and expandable numbered
 shortcuts. Autoplay is explicitly triggered by opening a project and never stops
 music on focus/activity changes. Music stays fully disabled by default.
-Promotion/versioning/release remain separate user decisions.
+Future promotion/versioning/releases remain separate user decisions.
 
 ## Goals and confirmed direction
 
@@ -283,9 +283,9 @@ reviewing this plan; none should be mistaken for a shipped feature.
   pause/resume, volume, and release without physical speakers. No audible music
   or desktop automation was used. Native macOS listening remains to be checked.
 
-- The final local .deb builds, contains all five audio notice files, reports the
-  unchanged 0.5.5 development version, and resolves all linked libraries. The
-  installed main remains untouched. The review sandbox is
+- The initial local .deb built with all five audio notice files, reported the
+  unchanged 0.5.5 development version, and resolved all linked libraries. The
+  review sandbox is
   `.muxal-dev/music-review`, launched using `scripts/dev.sh`, with a dedicated
   Music & keybindings review workspace and no preconfigured agents.
 
@@ -296,3 +296,13 @@ reviewing this plan; none should be mistaken for a shipped feature.
   tests for natural-end repeat, turning repeat off, and manual navigation while
   repeat is on. The follow-up gate passes 617 active tests, strict Clippy, the
   debug build, current 704-key extraction/check, and isolated-HOME launch smoke.
+
+- Release verification: v0.5.6 is published; all ten package checksums pass.
+  Native release builds and CI pass on Linux x86/ARM and universal macOS. CI runs
+  617 active tests on each Linux architecture and 613 on macOS. The published
+  Linux binary reports 0.5.6 and retains the glibc 2.35 baseline; Mac bundle
+  versions/architectures and packaged audio notices are verified. The user's
+  final volume request uses a 0–100% slider with one-percent steps, live readout,
+  live playback changes, and save on release. The release notes come directly
+  from the tracked changelog. Atomic promotion is complete; the installed main
+  reports 0.5.6, and the user restarts it themselves.

@@ -267,10 +267,10 @@ add a new `##` category if none fits).
 
 ## Where things stand (update this section when it changes)
 
-As of **v0.5.5** (tag `3fb4610`, published and promoted; verified 2026-10-20):
+As of **v0.5.6** (tag `ac84015`, published and promoted; verified 2026-10-20):
 
-- **Music/keybindings implementation (2026-10-20):** authorized and implemented
-  on `dev/music-keybindings`; see `docs/music-and-keybindings-plan.md`. No search
+- **Music/keybindings complete in v0.5.6:** developed on `dev/music-keybindings`;
+  see `docs/music-and-keybindings-plan.md`. No search
   or category filters: compact friendly rows, Modified only, individual resets,
   expandable numbered shortcuts/passthrough. Apply preserves unknown overrides;
   Reset/Cancel replace old live chords while preserving GPUI bindings. Settings
@@ -282,8 +282,8 @@ As of **v0.5.5** (tag `3fb4610`, published and promoted; verified 2026-10-20):
   repeat affects natural endings only and is saved with a default of off.
   Volume uses a 0–100% slider with 1% steps and a readout, replacing preset buttons;
   changes apply live and save on release. Cancel restores the previous volume.
-  One player serves the process's windows, with bounded discovery and streaming MP3/FLAC/
-  PCM WAV/Ogg Vorbis. Separate default-off autoplay starts once on project open;
+  One player serves the process's windows, with bounded discovery and streaming
+  MP3/FLAC/PCM WAV/Ogg Vorbis. Separate default-off autoplay starts once on project open;
   manual pause wins over later switches. No activity/focus sensor or automatic
   pause. Disable/quit releases resources. Main/dev processes remain independent.
   The local Linux gate passes 617 active tests, including generated four-format
@@ -295,38 +295,40 @@ As of **v0.5.5** (tag `3fb4610`, published and promoted; verified 2026-10-20):
   promotion. The requested finer volume slider is implemented; the user
   explicitly reconfirmed version bump/tag/release authorization after that change.
   Native macOS playback has not been exercised locally. The local .deb builds
-  with all audio notices and resolving
-  libraries. Final stripped Linux binary growth is about 1.56 MiB (1.84%), or
+  with all audio notices and resolving libraries. Measured stripped Linux binary
+  growth for the music implementation is about 1.56 MiB (1.84%), or
   425 KiB after gzip. The running review sandbox is `.muxal-dev/music-review`
   via `scripts/dev.sh`; the user controls its music choices.
-  Main remains 0.5.5 until the authorized 0.5.6 release is verified and promoted.
+  The verified release is published and main is atomically updated to 0.5.6.
   Do not automate desktop review or play audible test music.
   Human review confirmed music works and found a long project-name overflow in
   Settings → Projects. Project rows now constrain and ellipsize their text, with
-  the full name on hover; the editor retains its own column. Restart dev manually
-  to load the fix; never interrupt a running review or main yourself.
+  the full name on hover; the editor retains its own column. The user restarts
+  their running windows themselves; never interrupt a running review or main.
   The user's next idea is subtle optional navigation/workflow sound effects;
   record/design separately after this review, not implemented in this change.
-- **Release complete:** Spider maps and Phase 2, Rust/JS/TS/JSX/TSX/Python import
+- **Previous release (v0.5.5):** Spider maps and Phase 2, Rust/JS/TS/JSX/TSX/Python import
   connections, brighter Default Dark, Clay Dark, subtle Clay/Fahrenheit surface
   lifts, measured appearance pickers, Antigravity and Aider presets, and complete
   built-in web browser removal. Default Dark remains the fresh-install default;
   there are 20 themes. Workbench Dark was declined and removed.
-- **Verification:** native Linux x86/ARM and universal macOS release builds passed.
+- **v0.5.6 verification:** native Linux x86/ARM and universal macOS release builds passed.
   All ten downloaded package checksums are OK, zero failures. The published Linux
-  binary reports 0.5.5; both macOS bundle versions and both .deb metadata/dependency
-  lists were checked. The published Linux binary has no retired browser runtime
-  stack. Corrected master CI is green. Formatting, strict Clippy, workspace tests,
-  build, 644-key i18n check, and isolated-HOME smoke passed. A post-tag test-only
-  correction (`78a97df`) separates Linux invalid-UTF-8 filename fixtures from
-  portable Unix symlink tests; production code is identical to the release tag.
-  The local Linux gate passes 600 active tests (one manual benchmark ignored).
-- **Local main:** `scripts/promote.sh` atomically installed 0.5.5 and refreshed
-  the launcher. The installed binary reports 0.5.5. The user must restart main
+  binary reports 0.5.6; both macOS bundle versions, both Mac architectures,
+  both .deb metadata/dependency lists, and packaged audio notices were checked.
+  The published Linux binary resolves its libraries, retains the glibc 2.35
+  baseline, and has no retired browser runtime stack. Release CI and master CI
+  are green: 617 active tests on each Linux architecture, 613 on macOS.
+  Formatting, strict Clippy, build, 704-key i18n check, and isolated-HOME smoke
+  passed. The release notes exactly match the tracked changelog.
+- **Local main:** `scripts/promote.sh` atomically installed 0.5.6 and refreshed
+  the launcher. The installed binary reports 0.5.6. The user must restart main
   themselves; never kill or restart it. This release and promotion were explicitly
   authorized following dev review. Future changes need fresh promotion approval.
-  `master`, `dev/spider-map`, and the annotated tag are pushed. GitHub notes use
-  Added/Changed/Fixed/Removed/Development and the full comparison link. Always
+  `master`, `dev/music-keybindings`, and the annotated tag are pushed. GitHub notes
+  come from `CHANGELOG.md`, with user-facing changes first, smaller fixes included,
+  development details last, and the full comparison link. Record future changes
+  under Unreleased as they land. Always
   use `--repo bencordeiro/muxal` with release/CI gh commands.
 - **Spider:** complete; design notes in `docs/spider-map-plan.md`. A normal
   resizable/tabbed pane, disabled by default in Settings. Disabling stops work
