@@ -101,6 +101,7 @@ pub struct SettingsUi {
     pub font_family: Entity<InputState>,
     /// Ambience (cool/warm tint) slider.
     pub ambience_slider: Entity<gpui_component::slider::SliderState>,
+    pub music_volume_slider: Entity<gpui_component::slider::SliderState>,
 
     // Editor.
     pub editor_font_family: Entity<InputState>,
@@ -205,6 +206,12 @@ impl SettingsUi {
                 gpui_component::slider::SliderState::new()
                     .min(-f32::from(muxal_core::ambience::AMBIENCE_MAX))
                     .max(f32::from(muxal_core::ambience::AMBIENCE_MAX))
+                    .step(1.0)
+            }),
+            music_volume_slider: cx.new(|_| {
+                gpui_component::slider::SliderState::new()
+                    .min(0.0)
+                    .max(100.0)
                     .step(1.0)
             }),
             editor_font_family: cx

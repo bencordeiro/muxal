@@ -3974,6 +3974,10 @@ impl MuxalApp {
             },
         )
         .detach();
+        cx.subscribe(&settings_ui.music_volume_slider, |this, _, event, cx| {
+            this.change_music_volume(event, cx)
+        })
+        .detach();
         for (_, input) in &settings_ui.keybinds {
             cx.subscribe(input, |_, _, event, cx| {
                 if matches!(event, InputEvent::Change) {
@@ -17722,6 +17726,7 @@ impl MuxalApp {
                 notifications: self.notifications_enabled,
             });
             self.load_appearance_inputs(window, cx);
+            self.load_music_volume_input(window, cx);
             self.load_keybinding_inputs(window, cx);
         }
         cx.notify();

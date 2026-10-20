@@ -107,7 +107,9 @@ Terminal passthrough ▸
   unusable controls. When the sidebar is hidden, its existing toggle reveals
   the controls again; this version adds no second player in the top bar.
 - Add a Music section in Settings: Enable music, folder chooser, Refresh folder,
-  an output-volume control, and **Start music when opening a project** (off).
+  an output-volume slider (0–100% in 1% steps), and **Start music when opening a project** (off).
+  Volume changes live, with a percentage readout, and persists on release.
+  Cancel restores the opening volume, and reopening resynchronizes the handle.
   Volume stays out of the compact footer and never changes system-wide volume.
 
 ### Folder and playback policy — proposed first-version defaults

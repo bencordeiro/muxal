@@ -19,6 +19,35 @@ impl MusicUi {
 }
 
 impl MuxalApp {
+    pub(super) fn load_music_volume_input(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let volume = f32::from(self.settings.music.volume.min(100));
+        self.settings_ui
+            .music_volume_slider
+            .update(cx, |slider, cx| {
+                slider.set_value(volume, window, cx);
+            });
+    }
+
+    pub(super) fn change_music_volume(
+        &mut self,
+        event: &gpui_component::slider::SliderEvent,
+        cx: &mut Context<Self>,
+    ) {
+        use gpui_component::slider::SliderEvent;
+        let (SliderEvent::Change(value) | SliderEvent::Release(value)) = event;
+        let volume = value.start().round().clamp(0.0, 100.0) as u8;
+        if self.settings.music.volume != volume {
+            self.settings.music.volume = volume;
+            if let Some(service) = &self.music.service {
+                service.send(Command::Volume(volume));
+            }
+            cx.notify();
+        }
+        if matches!(event, SliderEvent::Release(_)) {
+            self.persist_settings();
+        }
+    }
+
     pub(super) fn sync_music(&mut self, cx: &mut Context<Self>) {
         let settings = self.settings.music.clone();
         if !settings.enabled && self.music.service.is_some() {
@@ -309,23 +338,29 @@ impl MuxalApp {
             .child(div().text_xs().text_color(cx.theme().muted_foreground)
                 .child(t("Starts once when a project opens. Music continues across project switches and while Muxal is in the background. A manual pause prevents later automatic starts.")))
             .child(self.settings_label(&t("Music volume"), cx));
-        let mut volumes = div().flex().flex_wrap().gap_1();
-        for volume in [15u8, 25, 35, 50, 75, 100] {
-            volumes = volumes.child(
-                Button::new(SharedString::from(format!("music-volume-{volume}")))
-                    .ghost()
-                    .small()
-                    .label(format!("{volume}%"))
-                    .selected(self.settings.music.volume == volume)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.settings.music.volume = volume;
-                        this.sync_music(cx);
-                        this.persist_settings();
-                        cx.notify();
-                    })),
-            );
-        }
-        form = form.child(volumes);
+        form = form.child(
+            div()
+                .flex()
+                .items_center()
+                .gap_3()
+                .max_w(px(360.0))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(gpui_component::slider::Slider::new(
+                            &self.settings_ui.music_volume_slider,
+                        )),
+                )
+                .child(
+                    div()
+                        .w(rems(3.0))
+                        .flex_none()
+                        .text_right()
+                        .text_sm()
+                        .child(format!("{}%", self.settings.music.volume.min(100))),
+                ),
+        );
         if self.music.status.partial {
             form = form.child(div().text_sm().child(t(
                 "Music list is partial: a folder limit or unreadable path was encountered.",

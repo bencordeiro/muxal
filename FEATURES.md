@@ -754,7 +754,8 @@ feature is added or changed, update the matching entry here in the same change**
   off; manual Previous/Next still work. Repeat is off by default and remembered.
   MP3, FLAC, PCM WAV, and Ogg
   Vorbis play in relative-path order through subfolders and repeat the folder.
-  Volume and folder refresh live in Settings; files are read in place without
+  A 0–100% volume slider in 1% steps and folder refresh live in Settings. Volume
+  adjusts live, saves on release, and can be rolled back with Cancel. Files are read in place without
   creating project files or copying music. Folder, volume, and last track are
   remembered; ordinary startup stays paused. An independent default-off autoplay
   option starts on the first project opening, including restored projects.
