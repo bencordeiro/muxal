@@ -220,6 +220,13 @@ ritual, in order:
 Always pass `--repo bencordeiro/muxal` to release/CI `gh` commands. With both
 origin and upstream remotes, `gh` can otherwise infer upstream Muxel.
 
+Keep `CHANGELOG.md` current alongside every user-facing change or fix, including
+small follow-ups. Before tagging, compare its release entry with every commit
+and the full diff since the previous tag, plus `FEATURES.md`; do not rely on
+memory or commit subjects alone. Move Unreleased items into the dated version
+section. The release workflow requires that section and publishes it verbatim
+(with headings adjusted); missing release notes fail publication.
+
 1. **Bump the version in three places**: workspace `Cargo.toml` `version`,
    `packaging/macos/Info.plist` (`CFBundleVersion` +
    `CFBundleShortVersionString`), and `Cargo.lock` (cargo updates it on the next
@@ -272,8 +279,10 @@ As of **v0.5.5** (tag `3fb4610`, published and promoted; verified 2026-10-20):
   Settings → Music chooses an existing folder; sidebar controls above New Project
   provide Previous, Play/Pause, Next, and repeat-current-track, with volume and
   refresh in Settings. Previous/Next wrap and keep paused playback paused;
-  repeat affects natural endings only and is saved with a default of off. One player
-  serves the process's windows, with bounded discovery and streaming MP3/FLAC/
+  repeat affects natural endings only and is saved with a default of off.
+  Volume uses a 0–100% slider with 1% steps and a readout, replacing preset buttons;
+  changes apply live and save on release. Cancel restores the previous volume.
+  One player serves the process's windows, with bounded discovery and streaming MP3/FLAC/
   PCM WAV/Ogg Vorbis. Separate default-off autoplay starts once on project open;
   manual pause wins over later switches. No activity/focus sensor or automatic
   pause. Disable/quit releases resources. Main/dev processes remain independent.
@@ -282,13 +291,16 @@ As of **v0.5.5** (tag `3fb4610`, published and promoted; verified 2026-10-20):
   The isolated-HOME GUI smoke passes with no music worker/device while disabled.
   Rodio is playback-only with selected codecs; Linux adds ALSA, with t64/old
   alternatives in .deb and full audio license notices in native packages.
-  Human layout/listening review is pending; macOS native playback needs validation
-  before a release. The local .deb builds with all audio notices and resolving
+  The user verified playback and controls and authorized v0.5.6 with normal
+  promotion. The requested finer volume slider is implemented; the user
+  explicitly reconfirmed version bump/tag/release authorization after that change.
+  Native macOS playback has not been exercised locally. The local .deb builds
+  with all audio notices and resolving
   libraries. Final stripped Linux binary growth is about 1.56 MiB (1.84%), or
   425 KiB after gzip. The running review sandbox is `.muxal-dev/music-review`
   via `scripts/dev.sh`; the user controls its music choices.
-  Main is unchanged; no promotion/version bump/release is
-  authorized. Do not automate desktop review or play audible test music.
+  Main remains 0.5.5 until the authorized 0.5.6 release is verified and promoted.
+  Do not automate desktop review or play audible test music.
   Human review confirmed music works and found a long project-name overflow in
   Settings → Projects. Project rows now constrain and ellipsize their text, with
   the full name on hover; the editor retains its own column. Restart dev manually

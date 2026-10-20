@@ -290,6 +290,24 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v5
+      - name: Read versioned changelog
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+          tag = os.environ["GITHUB_REF_NAME"]
+          changelog = Path("CHANGELOG.md").read_text()
+          section = re.search(
+              rf"^## {re.escape(tag)} — [^\n]+\n(.*?)(?=^## |\Z)",
+              changelog, re.MULTILINE | re.DOTALL,
+          )
+          if section is None or not section.group(1).strip():
+              raise SystemExit(f"Missing changelog entry for {tag}")
+          notes = re.sub(r"^### ", "## ", section.group(1).strip(), flags=re.MULTILINE)
+          Path("release-notes.md").write_text(notes + "\n")
+          PY
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
@@ -307,4 +325,4 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: artifacts/**/*
-          generate_release_notes: true
+          body_path: release-notes.md

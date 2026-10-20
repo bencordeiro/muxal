@@ -57,8 +57,8 @@ develops itself (installed main + sandboxed dev).
 
 Pushing a `v*` tag makes GitHub Actions build every package on native runners
 and publish them to
-[GitHub Releases](https://github.com/bencordeiro/muxal/releases) with
-auto-generated notes:
+[GitHub Releases](https://github.com/bencordeiro/muxal/releases) with the
+matching entry from [CHANGELOG.md](CHANGELOG.md), including small fixes:
 
 | Platform | Assets |
 | --- | --- |
