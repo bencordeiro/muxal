@@ -3,7 +3,7 @@
 Status: Phase 2 implemented on dev; human verification pending, 2026-10-19. The user
 authorized both optional overlays and requested agent bug checks before human
 review. Muxal remains implemented in Rust; the initial code-connection analysis
-understands Rust projects. No promotion or release has been approved.
+understands Rust, JavaScript, TypeScript (including JSX/TSX), and Python projects. No promotion or release has been approved.
 
 ## Purpose
 
@@ -367,7 +367,9 @@ remain disabled by default. Lightweight operation is a requirement.
   latest graph await the UI, preserving observation times without accumulating
   older graph copies. Native events are coalesced over 100 ms; no whole-project
   walk/Git query is performed for each edit.
-- Rust analysis reuses the parser/grammar already bundled with the editor.
+- Connection analysis reuses the parsers/grammars already bundled with the editor.
+  The language set is capped at Rust, JavaScript, TypeScript (JSX/TSX included),
+  and Python; the user requested no further languages. Rust analysis
   It handles ordinary file/inline modules, explicit file-module paths, grouped
   imports, root re-exports, and declared local Cargo dependencies/aliases.
   Unresolved relationships stay explicit; unsupported path/cfg constructs and
@@ -410,8 +412,8 @@ agents share a checkout, filesystem/Git activity cannot identify which one made
 a change. A working agent's presence in a worktree also does not prove it is
 editing a particular file.
 
-The user considers agent attribution an optional idea, worthwhile only if a
-reliable, inexpensive route becomes available. File modification time can be
+The user declined agent attribution on 2026-10-19; it has no value for their
+workflow. Do not implement or re-propose it without a new request. File modification time can be
 affected by the user, an agent, Git, generators, or a build and does not identify
 the writer. Precise attribution needs provider-specific events or another
 explicitly designed signal. No agent commands, handoffs, permissions, or task
@@ -511,3 +513,38 @@ dispatch should follow automatically from interacting with the map.
   `.github` expanded together with the root/siblings retained and no duplicate
   Checkout row. Review in **Spider — folder expansion fixes**.
   Main is unchanged and promotion remains unapproved.
+
+### Basic language support completion
+
+- Added JavaScript, TypeScript (JSX/TSX and module extension variants), and Python
+  to the existing Rust resolver. No further languages are planned or requested.
+- JS/TS: ordinary relative imports, re-exports, literal `import()` and CommonJS
+  `require`, source extension substitution and index modules. Multiple possible
+  files are unresolved; custom aliases, package exports, loaders, and computed
+  runtime paths are excluded. Shadowed `require` is not treated as a module load.
+- Python: `import`/`from`, aliases, relative packages, namespace children, common
+  checkout/`src` roots, and package initialization/re-exports. Ambiguous search
+  roots, escaping relatives, and missing local modules are unresolved. No Python
+  code or environment startup is executed to discover custom search paths.
+- All language facts share the existing worker, source/read limits, graph and
+  navigation UI. Source saves remove obsolete edges before re-analysis. Parsing
+  visits at most 200,000 syntax nodes and keeps at most 20,000 imports per source;
+  JS/TS and Python each bound graph resolution to 100,000 import operations.
+  The merged graph stays within 100,000 links and reports partial coverage when
+  capped. Traversal and parsing add no UI-thread work or external processes.
+- TypeScript resolution reference: https://www.typescriptlang.org/docs/handbook/modules/reference.html
+  Python import reference: https://docs.python.org/3/reference/import.html
+
+- Language validation: full workspace gate passed with 607 Rust tests, strict
+  Clippy, build, formatting, extraction/check, and isolated-HOME smoke. Native
+  mixed-language sample showed 9 parsed files and 8 links with no unresolved
+  local imports; selecting App.tsx and Python main.py showed their expected
+  arrows and exact paths. A native filesystem test confirmed live save/removal
+  updates for TypeScript, JavaScript/JSX, and Python.
+
+- Current repository observer benchmark after language additions: activity-only
+  startup about 20 ms, 53 watches, zero source reads; connections about 281 ms,
+  81 source/manifest reads, 75 source files, 145 links, 6 unresolved, no partial
+  coverage flag. Native mixed-language arrows and paths were confirmed too.
+  The subsequent Default Dark work passed the complete gate at 608 tests and
+  does not change the Spider opt-in/default-off or observer visibility rules.

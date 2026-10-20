@@ -14,6 +14,11 @@ use std::rc::Rc;
 /// spacing). Overridable per-user via [`UiFontSize`].
 const DEFAULT_UI_FONT_SIZE: f32 = 16.0;
 
+// GPUI's registry keeps its built-in entries and won't replace a duplicate
+// name. Use a private registry key for our palette, retaining "Default Dark"
+// in the picker and saved settings. Registry reloads then keep the right colors.
+const DEFAULT_DARK_THEME: &str = "Muxal Default Dark";
+
 /// Global UI scale (zoom) factor for the whole app.
 pub struct UiScale(pub f32);
 impl Global for UiScale {}
@@ -175,8 +180,24 @@ pub fn theme_names(cx: &App) -> Vec<SharedString> {
     ThemeRegistry::global(cx)
         .sorted_themes()
         .iter()
-        .map(|c| c.name.clone())
+        .filter(|c| c.name.as_ref() != "Default Dark")
+        .map(|c| display_theme_name(&c.name).to_string().into())
         .collect()
+}
+
+/// The public name stays stable even when a palette has a private registry key.
+pub fn theme_name(cx: &App) -> SharedString {
+    display_theme_name(cx.theme().theme_name())
+        .to_string()
+        .into()
+}
+
+fn display_theme_name(name: &str) -> &str {
+    if name == DEFAULT_DARK_THEME {
+        "Default Dark"
+    } else {
+        name
+    }
 }
 
 /// Apply the saved theme by name at startup (falls back to the default dark theme).
@@ -188,6 +209,7 @@ pub fn apply_initial_theme(name: &str, cx: &mut App) {
             .themes()
             .get(name)
             .cloned()
+            .or_else(|| registry.themes().get(DEFAULT_DARK_THEME).cloned())
             .unwrap_or_else(|| registry.default_dark_theme().clone())
     };
     let config = ambience_config(&config, ambience_blend(ambience_cast(cx)));
@@ -213,6 +235,7 @@ pub fn apply_theme(name: &str, cx: &mut App) {
 /// still use the startup fallback, without reappearing in the picker.
 fn canonical_theme_name(name: &str) -> &str {
     match name {
+        "" | "Default Dark" => DEFAULT_DARK_THEME,
         "Hacker" => "Mainframe",
         "Tokyo Night" | "Tokyo Storm" | "Tokyo Moon" => "Tokyo Dark",
         "Twilight" => "Twilight Grey",
@@ -283,7 +306,7 @@ pub fn palette_from_theme(cx: &App) -> TerminalPalette {
 
 #[cfg(test)]
 mod tests {
-    use super::{ThemeAssets, canonical_theme_name};
+    use super::{DEFAULT_DARK_THEME, ThemeAssets, canonical_theme_name, display_theme_name};
     use gpui_component::ThemeSet;
     use std::collections::BTreeSet;
 
@@ -297,7 +320,8 @@ mod tests {
                 assert!(names.insert(theme.name.to_string()), "duplicate theme");
             }
         }
-        // Default Light/Dark are supplied by gpui-component itself.
+        // Default Light is supplied by GPUI. Our Default Dark has a private
+        // registry key so GPUI's duplicate-name guard cannot discard it.
         let expected: BTreeSet<_> = [
             "Alduin",
             "Ayu Dark",
@@ -310,6 +334,7 @@ mod tests {
             "Gruvbox Dark",
             "Gruvbox Light",
             "Mainframe",
+            "Muxal Default Dark",
             "Liquid Spaceglass",
             "Molokai Dark",
             "Porcelain",
@@ -329,12 +354,22 @@ mod tests {
             "Twilight",
             "Catppuccin Macchiato",
             "Catppuccin Mocha",
+            "Default Dark",
+            "",
         ] {
             assert!(names.contains(canonical_theme_name(old)));
         }
         for name in &names {
             assert_eq!(canonical_theme_name(name), name);
         }
+    }
+    #[test]
+    fn default_dark_keeps_its_public_name_and_maps_fresh_and_saved_choices() {
+        assert_eq!(canonical_theme_name(""), DEFAULT_DARK_THEME);
+        assert_eq!(canonical_theme_name("Default Dark"), DEFAULT_DARK_THEME);
+        assert_eq!(display_theme_name(DEFAULT_DARK_THEME), "Default Dark");
+        assert_eq!(display_theme_name("Default Light"), "Default Light");
+        assert_eq!(canonical_theme_name("Ayu Dark"), "Ayu Dark");
     }
 }
 

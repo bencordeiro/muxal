@@ -4,7 +4,47 @@ use super::valid_relative;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
+mod javascript;
+mod python;
 pub mod rust;
+mod syntax;
+
+/// The supported language set is deliberate: Rust, JS/TS (including JSX/TSX),
+/// and Python. All parsers consume caller-supplied strings; none perform I/O.
+#[derive(Default)]
+pub struct Index {
+    rust: rust::RustIndex,
+    javascript: javascript::JavaScriptIndex,
+    python: python::PythonIndex,
+}
+impl Index {
+    pub fn supported(path: &Path) -> bool {
+        rust::RustIndex::supported(path)
+            || javascript::JavaScriptIndex::supported(path)
+            || python::PythonIndex::supported(path)
+    }
+    pub fn remove(&mut self, path: &Path) {
+        self.rust.remove(path);
+        self.javascript.remove(path);
+        self.python.remove(path);
+    }
+    pub fn update(&mut self, path: PathBuf, source: &str) {
+        if rust::RustIndex::supported(&path) {
+            self.rust.update(path, source);
+        } else if javascript::JavaScriptIndex::supported(&path) {
+            self.javascript.update(path, source);
+        } else if python::PythonIndex::supported(&path) {
+            self.python.update(path, source);
+        }
+    }
+    pub fn graph(&self) -> Graph {
+        Graph::combine([
+            self.rust.graph(),
+            self.javascript.graph(),
+            self.python.graph(),
+        ])
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Direction {
@@ -30,6 +70,34 @@ pub struct Graph {
     pub partial: bool,
 }
 impl Graph {
+    fn combine(graphs: impl IntoIterator<Item = Self>) -> Self {
+        let mut edges = BTreeSet::new();
+        let mut files = 0;
+        let mut unresolved = 0;
+        let mut external = 0;
+        let mut partial = false;
+        for graph in graphs {
+            files += graph.files;
+            unresolved += graph.unresolved;
+            external += graph.external;
+            partial |= graph.partial;
+            for (from, targets) in graph.outgoing {
+                for to in targets {
+                    edges.insert((from.clone(), to));
+                    if edges.len() > 100_000 {
+                        edges.pop_last();
+                        partial = true;
+                    }
+                }
+            }
+        }
+        let mut graph = Self::new(edges);
+        graph.files = files;
+        graph.unresolved = unresolved;
+        graph.external = external;
+        graph.partial = partial;
+        graph
+    }
     pub fn new(edges: impl IntoIterator<Item = (PathBuf, PathBuf)>) -> Self {
         let edges: BTreeSet<_> = edges
             .into_iter()
@@ -83,8 +151,65 @@ impl Graph {
 
 #[cfg(test)]
 mod tests {
-    use super::{Direction, Graph};
+    use super::{Direction, Graph, Index};
     use std::path::Path;
+    #[test]
+    fn mixed_language_index_keeps_incoming_links_updates_and_scope_limits() {
+        let mut index = Index::default();
+        for (path, source) in [
+            (
+                "Cargo.toml",
+                "[package]\nname='mixed'\nversion='0.1.0'\nedition='2024'\n",
+            ),
+            ("src/lib.rs", "mod model;"),
+            ("src/model.rs", ""),
+            ("web/app.tsx", "import './view';"),
+            ("web/view.jsx", "export default <div/>;"),
+            ("scripts/main.py", "import helper\n"),
+            ("scripts/helper.py", ""),
+        ] {
+            index.update(path.into(), source);
+        }
+        let graph = index.graph();
+        assert_eq!(graph.files, 6);
+        assert_eq!(graph.edges, 3);
+        assert!(!graph.partial);
+        let incoming = graph.relations(Path::new("web/view.jsx"), false, 10);
+        assert_eq!(incoming[0].path, Path::new("web/app.tsx"));
+        assert_eq!(incoming[0].direction, Direction::UsedBy);
+        index.remove(Path::new("scripts/helper.py"));
+        assert!(
+            index
+                .graph()
+                .relations(Path::new("scripts/main.py"), false, 10)
+                .is_empty()
+        );
+        for file in [
+            "a.ts", "a.tsx", "a.jsx", "a.js", "a.mts", "a.cjs", "a.py", "a.rs",
+        ] {
+            assert!(Index::supported(Path::new(file)), "{file}");
+        }
+        for file in ["a.go", "a.cs", "a.rb", "a.vue", "data.json"] {
+            assert!(!Index::supported(Path::new(file)), "{file}");
+        }
+    }
+    #[test]
+    fn merging_languages_keeps_the_total_edge_budget_deterministic_and_explicit() {
+        let make = |prefix: &str| {
+            Graph::new((0..60_000).map(|n| {
+                (
+                    format!("{prefix}/main").into(),
+                    format!("{prefix}/file{n:05}").into(),
+                )
+            }))
+        };
+        let a = Graph::combine([make("web"), make("python")]);
+        let b = Graph::combine([make("python"), make("web")]);
+        assert_eq!(a.edges, 100_000);
+        assert!(a.partial);
+        assert_eq!(a.outgoing, b.outgoing);
+        assert_eq!(a.incoming, b.incoming);
+    }
     #[test]
     fn directional_relations_deduplicate_and_stop_at_cycles_and_budgets() {
         let graph = Graph::new(

@@ -18,6 +18,9 @@ base64 = "0.22"
 # language-server process is needed for Spider's bounded Rust import overlay.
 tree-sitter = "0.26"
 tree-sitter-rust = "0.24.2"
+tree-sitter-javascript = "0.23.1"
+tree-sitter-typescript = "0.23.2"
+tree-sitter-python = "0.23.6"
 toml = "0.8"
 
 [dev-dependencies]

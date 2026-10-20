@@ -501,7 +501,7 @@ impl SpiderView {
                         this.change_config(cx);
                     })))
                 .child(Button::new("code-connections").xsmall().ghost().label(t("Code connections"))
-                    .tooltip(t("Rust module and import links for the selected file"))
+                    .tooltip(t("Local imports in Rust, JavaScript, TypeScript, and Python"))
                     .selected(config.connections)
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.state.config.connections = !this.state.config.connections;
@@ -699,18 +699,14 @@ impl SpiderView {
         }
         if self.state.config.connections {
             if let Some(graph) = &self.live.graph {
-                list = list.child(
-                    div()
-                        .font_semibold()
-                        .child(t("Rust module / import connections")),
-                );
+                list = list.child(div().font_semibold().child(t("File import connections")));
                 list = list.child(div().child(tf(
-                    "{files} parsed files · {edges} links · {unresolved} unresolved · {external} external imports excluded",
+                    "{files} parsed files · {edges} links · {unresolved} unresolved · {external} external / bare imports excluded",
                     &[("files", &graph.files.to_string()), ("edges", &graph.edges.to_string()),
                       ("unresolved", &graph.unresolved.to_string()), ("external", &graph.external.to_string())],
                 )));
                 list = list.child(div().child(t(
-                    "Static links; macros, cfg conditions, and runtime calls are not evaluated",
+                    "Static file links; custom search paths, conditions, and runtime calls are not evaluated",
                 )));
                 if graph.partial {
                     list = list.child(div().text_color(cx.theme().warning).child(t(
@@ -719,7 +715,7 @@ impl SpiderView {
                 }
                 if node.kind == Kind::Directory {
                     list = list.child(
-                        div().child(t("Select a Rust file to see what it uses and what uses it")),
+                        div().child(t("Select a Rust, JavaScript, TypeScript, or Python file to see its connections")),
                     );
                 } else if self.relations.is_empty() {
                     list =
@@ -766,7 +762,7 @@ impl SpiderView {
                 list = list.child(div().child(if self.live.ready {
                     t("No connection data available")
                 } else {
-                    t("Preparing Rust connections…")
+                    t("Preparing code connections…")
                 }));
             }
         }
@@ -1149,7 +1145,7 @@ impl Render for SpiderView {
                     } else if self.state.config.activity {
                         t("Cyan glow: edited file or nearest visible folder · 25s · root stays quiet")
                     } else {
-                        t("Rust connections update after saved source changes")
+                        t("Code connections update after saved source changes")
                     }),
             );
             if self.state.config.connections {

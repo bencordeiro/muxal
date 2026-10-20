@@ -20727,7 +20727,7 @@ impl MuxalApp {
     }
 
     fn render_settings_appearance(&self, cx: &mut Context<Self>) -> AnyElement {
-        let current_theme = cx.theme().theme_name().clone();
+        let current_theme = theme::theme_name(cx);
         v_flex()
             .gap_3()
             .max_w(px(520.0))

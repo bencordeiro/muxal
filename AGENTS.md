@@ -317,7 +317,7 @@ As of **v0.5.4** (tag `d1a01a4`, published and promoted):
   gradually. Spider must be opt-in in Settings and **disabled by default**;
   disabling stops its background work and preserves existing tabs as placeholders.
   The initial live sandbox render received positive preliminary feedback. The
-  full gate passes (595 Rust tests, plus the previously run manual observer benchmark),
+  full gate passes (608 Rust tests, plus the manual observer benchmark),
   extract-only i18n is current (659 English keys), and the
   isolated-HOME launch smoke passed. A restored disabled tab launched no scans;
   the enabled native map scanned this repository in about 0.3 seconds. The
@@ -325,8 +325,8 @@ As of **v0.5.4** (tag `d1a01a4`, published and promoted):
   RSS and at most 300 visible nodes. Final human review is pending for compact
   readability, controls/navigation, settings disable/re-enable, and pane/window
   operations. **Phase 2 is implemented in dev:** independent default-off Recent
-  activity (25-second cyan glow) and Code connections (Rust module/import links,
-  local Cargo dependencies/re-exports, optional indirect paths up to three hops).
+  activity (25-second cyan glow) and Code connections (Rust, JavaScript,
+  TypeScript/JSX/TSX, and Python imports, optional indirect paths up to three hops).
   Related paths are revealed within the existing visible-node budget; Inspect
   supplies exact incoming/outgoing paths and coverage limitations. This uses
   the existing syntax parser, without compiler/LSP processes or agent hooks.
@@ -346,11 +346,12 @@ As of **v0.5.4** (tag `d1a01a4`, published and promoted):
   the header button working with View closed. Metrics otherwise use manual
   Refresh. Measured
   observer startup on this repository: about 20 ms for activity only; about
-  281 ms for connections, 74 source/manifest reads, 68 Rust files and 136 links.
+  281 ms for connections, 81 source/manifest reads, 75 source files and 145 links
+  after adding JS/TS/Python (6 unresolved imports, no partial-coverage flag).
   Agent checks confirmed the visible glow/fade, direct/indirect inspector links,
   and observer shutdown when toggles are off or the shell is maximized. Final
   visual acceptance remains the user's. File activity never identifies an
-  agent; attribution remains optional only if reliable and inexpensive. Keep
+  agent; the user has declined agent attribution entirely. Keep
   these resource limits and honest labels. Do not promote without explicit approval.
   Human review clarified **expansion first**: double-click/Enter/Space opens or
   closes a branch within the wider map while readable, previewing immediate
@@ -382,3 +383,26 @@ As of **v0.5.4** (tag `d1a01a4`, published and promoted):
   day timeline, cost meter, …).
 - The user drives versioning: patch releases when enough has landed (v0.5.2 =
   three changes, v0.5.3 = one fix), tested in `scripts/dev.sh` before shipping.
+
+- **Spider follow-up language boundary (2026-10-19):** the user authorized basic
+  code connections for JavaScript, TypeScript (including JSX/TSX), and Python,
+  alongside existing Rust support. No additional languages are wanted. Reuse
+  bundled syntax parsers and the shared bounded observer; do not add language
+  servers, compiler/interpreter execution, custom-alias guessing, or agent hooks.
+  Agent attribution is explicitly declined. The language gate passed with 607
+  tests; native checks showed the expected JS/TS and Python links and paths.
+- **Default Dark refresh (2026-10-19):** the user requested a brighter, balanced
+  charcoal theme while retaining Default Dark as the fresh-install default.
+  The new bundled palette has layered charcoal surfaces, soft text, pale-blue
+  accents, and distinct terminal/syntax/status colors. GPUI rejects duplicate
+  theme names, so the registry uses `Muxal Default Dark` internally; application
+  theme helpers map the existing Default Dark label and empty settings to it.
+  Keep the picker label, persisted choices, and fresh/unknown-theme fallback
+  coherent. Other saved theme choices stay selected. Full gate passed with
+  608 tests, strict Clippy, build, 659-string i18n extraction/check, and an
+  isolated-HOME smoke with saved Default Dark. Native checks confirmed fresh
+  fallback, the public picker label, switching Light → Dark, saving Default Dark,
+  menus/controls, ANSI colors, and JS/TS/Python map links. Core text contrast is
+  about 12.1:1 and muted text 6.9:1 on the main background. The current sandbox
+  is **Muxal — Default Dark review**. Final visual acceptance remains the user's;
+  more user tasks remain before any release or promotion.

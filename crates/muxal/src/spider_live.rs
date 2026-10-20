@@ -2,7 +2,7 @@
 //! the checkout, no Git processes, and no reads of source for activity alone.
 use crate::i18n::t;
 use crate::spider_scan::{Snapshot, open_project_file};
-use muxal_core::spider::connections::{Graph, rust::RustIndex};
+use muxal_core::spider::connections::{Graph, Index};
 use muxal_core::spider::{Kind, valid_relative};
 use notify::{
     Event, EventKind, RecursiveMode, Watcher,
@@ -288,7 +288,7 @@ fn run(
             .iter()
             .filter(|n| {
                 matches!(n.kind, Kind::Text | Kind::Unknown | Kind::Deleted)
-                    && RustIndex::supported(&n.path)
+                    && Index::supported(&n.path)
             })
             .take(MAX_SOURCE_FILES + 1)
             .map(|n| n.path.clone())
@@ -301,7 +301,7 @@ fn run(
         .take(MAX_SOURCE_FILES)
         .cloned()
         .collect();
-    let mut index = RustIndex::default();
+    let mut index = Index::default();
     let mut source_limited = source_paths.len() > MAX_SOURCE_FILES;
     if connections {
         let deadline = Instant::now() + Duration::from_secs(8);
@@ -640,6 +640,62 @@ mod tests {
                 .relations(Path::new("src/lib.rs"), false, 20)
                 .iter()
                 .any(|r| r.path == Path::new("src/b.rs"))
+        );
+        drop(monitor);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn javascript_typescript_and_python_connections_update_on_real_saves() {
+        let root = fixture();
+        for (file, source) in [
+            ("web/main.tsx", "import './view'; import './helper.js';"),
+            ("web/view.jsx", "export default <div/>;"),
+            ("web/helper.js", "export const helper = 1;"),
+            ("python/main.py", "from .helper import run\n"),
+            ("python/helper.py", "def run(): pass\n"),
+        ] {
+            let path = root.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, source).unwrap();
+        }
+        let snapshot =
+            Arc::new(spider_scan::scan(root.clone(), Arc::new(AtomicBool::new(false))).unwrap());
+        let monitor = Monitor::start(snapshot, true).unwrap();
+        let initial = wait(&monitor, |u| u.graph.is_some()).graph.unwrap();
+        for (file, target) in [
+            ("web/main.tsx", "web/view.jsx"),
+            ("web/main.tsx", "web/helper.js"),
+            ("python/main.py", "python/helper.py"),
+        ] {
+            assert!(
+                initial
+                    .relations(Path::new(file), false, 100)
+                    .iter()
+                    .any(|r| r.direction == Direction::Uses && r.path == Path::new(target)),
+                "{file} -> {target}"
+            );
+        }
+        std::fs::write(root.join("web/main.tsx"), "export const done = true;").unwrap();
+        let graph = wait(&monitor, |u| {
+            u.graph.is_some() && u.paths.iter().any(|p| p == Path::new("web/main.tsx"))
+        })
+        .graph
+        .unwrap();
+        assert!(
+            graph
+                .relations(Path::new("web/main.tsx"), false, 100)
+                .is_empty()
+        );
+        std::fs::remove_file(root.join("python/helper.py")).unwrap();
+        let graph = wait(&monitor, |u| {
+            u.graph.is_some() && u.paths.iter().any(|p| p == Path::new("python/helper.py"))
+        })
+        .graph
+        .unwrap();
+        assert!(
+            graph
+                .relations(Path::new("python/main.py"), false, 100)
+                .is_empty()
         );
         drop(monitor);
         std::fs::remove_dir_all(root).unwrap();

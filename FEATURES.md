@@ -326,16 +326,21 @@ feature is added or changed, update the matching entry here in the same change**
   Bursts are batched, scans start at most once per five seconds per checkout,
   and changes received during a scan remain pending. The camera and expanded
   branches are preserved. A failed scan waits for manual Refresh to retry.
-- **Rust code connections** — an independent, default-off **Code connections**
-  toggle shows the selected file's resolved Rust module declarations and
-  module-level imports, including local workspace dependencies and re-exports.
+- **Code connections** — an independent, default-off **Code connections** toggle
+  shows local file import relationships in **Rust, JavaScript, TypeScript
+  (including JSX/TSX), and Python**. Rust resolves module declarations, imports,
+  local Cargo dependencies, and re-exports. JavaScript/TypeScript resolve relative
+  imports, re-exports, literal `import()`/CommonJS `require`, unambiguous source
+  extension substitutions, and directory index files. Python resolves ordinary
+  `import`/`from` statements, relative packages, and common checkout/`src` layouts.
   Cyan arrows mean uses, purple means used by; **Indirect** includes up to three
   steps with dashed links. Related files are revealed within the visible-node
   budget; remaining hidden targets end at visible ancestor folders. Inspect
-  lists exact paths and lets you select them. External imports,
-  unresolved paths, and partial analysis are reported. This is a static import
-  map, without compiler execution, macro expansion, cfg evaluation, or runtime
-  call inference; other project languages are not analyzed yet.
+  lists exact paths and reports unresolved, excluded, and partial coverage.
+  These are static file links: custom aliases/search paths, installed packages,
+  loader plugins, conditional resolution, and runtime symbol/call behavior are
+  not evaluated. Ambiguous paths stay unresolved. Language support is limited
+  to these four languages; agent attribution is not planned.
 - **Saved-source updates** — while connections are enabled and visible, saved
   changes update cached source facts and links. Text-line metrics and the file
   inventory update through **Refresh**, or an automatic inventory refresh when
@@ -703,6 +708,11 @@ feature is added or changed, update the matching entry here in the same change**
   deep indigo. Tokyo consolidates the former Night/Storm/Moon variants (saved
   selections migrate automatically). Adventure is removed; saved Adventure
   selections fall back to Default Dark.
+- **Default Dark** — the default for fresh installs and environments uses
+  balanced charcoal surfaces, layered panels/tabs/menus, soft light text, and
+  pale-blue focus accents. Terminal ANSI and editor syntax colors remain distinct
+  and readable. Existing Default Dark selections receive the refreshed palette;
+  saved choices of other themes keep their selection.
 - **Mainframe** — black terminal backgrounds with phosphor-green text, neutral
   charcoal chrome, gray labels and borders, and restrained green focus accents.
   Editor syntax stays green with amber literals; ANSI/status colors remain
