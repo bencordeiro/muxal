@@ -7,6 +7,7 @@
 use crate::i18n::t;
 use gpui::*;
 use gpui_component::input::InputState;
+use gpui_component::select::SelectState;
 use muxal_core::{EnvVar, InjectionMode};
 use uuid::Uuid;
 
@@ -158,6 +159,8 @@ pub struct SettingsUi {
     pub proj_name: Entity<InputState>,
 
     // Appearance.
+    pub theme_picker: Entity<SelectState<Vec<SharedString>>>,
+    pub language_picker: Entity<SelectState<Vec<SharedString>>>,
     pub font_family: Entity<InputState>,
     /// Ambience (cool/warm tint) slider.
     pub ambience_slider: Entity<gpui_component::slider::SliderState>,
@@ -242,6 +245,15 @@ impl SettingsUi {
             l_minute: cx.new(|cx| InputState::new(window, cx).placeholder("00")),
             selected_project: None,
             proj_name: cx.new(|cx| InputState::new(window, cx).placeholder(t("Project name"))),
+            theme_picker: cx
+                .new(|cx| SelectState::new(crate::theme::theme_names(cx), None, window, cx)),
+            language_picker: cx.new(|cx| {
+                let languages = crate::i18n::available_languages()
+                    .iter()
+                    .map(|entry| SharedString::from(entry.1))
+                    .collect::<Vec<_>>();
+                SelectState::new(languages, None, window, cx)
+            }),
             font_family: {
                 // Show the *detected* installed default, not a hardcoded family
                 // that may not exist on this machine.

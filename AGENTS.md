@@ -285,6 +285,13 @@ As of **v0.5.4** (tag `d1a01a4`, published and promoted):
   Existing review windows use older binaries until the user restarts dev. Basic
   visual reviews are user-led; do not automate desktop interactions for them.
   Promotion remains unapproved.
+- **Appearance picker fix (dev):** the user reported the theme dropdown collapsing
+  to a thin strip. Theme and language now use GPUI's measured `Select` lists
+  rather than overflow-only `PopupMenu` sizing. Heights are capped by the live
+  viewport, widths respect the settings content, and selections resync when
+  Settings opens (including after Cancel). Full gate passed: formatting, strict
+  Clippy, 597 active Rust tests, build, 644-key i18n check, and isolated-HOME
+  launch smoke. User visual review remains pending; restart dev to use the fix.
 - **Built-in web browser removal (dev):** implemented and locally verified.
   Formatting, strict Clippy, all 597 active Rust tests (one manual benchmark
   ignored), debug/release builds, extract-only i18n (644 keys), and the isolated

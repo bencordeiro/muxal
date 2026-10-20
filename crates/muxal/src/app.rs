@@ -20,6 +20,7 @@ use gpui_component::checkbox::Checkbox;
 use gpui_component::input::{Input, InputEvent, InputState, Position};
 use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_component::scroll::{Scrollbar, ScrollbarAxis};
+use gpui_component::select::{Select, SelectEvent};
 use gpui_component::spinner::Spinner;
 use gpui_component::tag::Tag;
 use gpui_component::text::markdown;
@@ -3937,6 +3938,22 @@ impl MuxalApp {
             .unwrap_or(0);
         let available_programs = installed_programs(&presets);
         let settings_ui = SettingsUi::new(window, cx);
+        cx.subscribe(&settings_ui.theme_picker, |this, _, event, cx| {
+            if let SelectEvent::Confirm(Some(name)) = event {
+                this.set_theme(name.clone(), cx);
+            }
+        })
+        .detach();
+        cx.subscribe(&settings_ui.language_picker, |this, _, event, cx| {
+            if let SelectEvent::Confirm(Some(label)) = event
+                && let Some((language, _)) = crate::i18n::available_languages()
+                    .iter()
+                    .find(|(_, name)| *name == label.as_ref())
+            {
+                this.set_language(language.to_string(), cx);
+            }
+        })
+        .detach();
         cx.subscribe_in(
             &settings_ui.ambience_slider,
             window,
@@ -17707,6 +17724,16 @@ impl MuxalApp {
     }
 
     fn load_appearance_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings_ui.theme_picker.update(cx, |picker, cx| {
+            picker.set_selected_value(&theme::theme_name(cx), window, cx);
+        });
+        self.settings_ui.language_picker.update(cx, |picker, cx| {
+            picker.set_selected_value(
+                &crate::i18n::display_name(&crate::i18n::current_language()),
+                window,
+                cx,
+            );
+        });
         let fam = self.settings.font_family.clone();
         self.settings_ui
             .font_family
@@ -20117,7 +20144,7 @@ impl MuxalApp {
 
         let content_w = self.settings_content_w(window);
         let content = match current {
-            SettingsSection::Appearance => self.render_settings_appearance(cx),
+            SettingsSection::Appearance => self.render_settings_appearance(window, cx),
             SettingsSection::Editor => self.render_settings_editor(cx),
             SettingsSection::Behavior => self.render_settings_behavior(cx),
             SettingsSection::Agents => self.render_settings_agents(cx),
@@ -20161,45 +20188,28 @@ impl MuxalApp {
             .into_any_element()
     }
 
-    fn render_settings_appearance(&self, cx: &mut Context<Self>) -> AnyElement {
-        let current_theme = theme::theme_name(cx);
+    fn render_settings_appearance(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        // PopupMenu's overflow-only sizing collapses inside these popovers.
+        // Select measures its list rows, giving long choice lists a real,
+        // bounded viewport while preserving keyboard navigation and focus.
+        let menu_height = (window.viewport_size().height * 0.5).min(px(420.0));
         v_flex()
             .gap_3()
             .max_w(px(520.0))
             .child(self.settings_label(&t("Theme"), cx))
             .child(
-                DropdownButton::new("settings-theme")
-                    .button(
-                        Button::new("settings-theme-btn")
-                            .ghost()
-                            .icon(IconName::Palette)
-                            .label(current_theme),
-                    )
-                    .dropdown_menu(move |mut menu, _window, cx| {
-                        for name in theme::theme_names(cx) {
-                            menu =
-                                menu.menu(name.clone(), Box::new(crate::theme::SwitchTheme(name)));
-                        }
-                        menu.scrollable(true)
-                    }),
+                Select::new(&self.settings_ui.theme_picker)
+                    .w(rems(16.0))
+                    .max_w_full()
+                    .menu_max_h(menu_height),
             )
             .child(self.settings_label(&t("Language"), cx))
             .child(
-                DropdownButton::new("settings-language")
-                    .button(
-                        Button::new("settings-language-btn")
-                            .ghost()
-                            .label(crate::i18n::display_name(&crate::i18n::current_language())),
-                    )
-                    .dropdown_menu(move |mut menu, _window, _cx| {
-                        for entry in crate::i18n::available_languages() {
-                            menu = menu.menu(
-                                SharedString::from(entry.1),
-                                Box::new(crate::i18n::SetLanguage(entry.0.to_string())),
-                            );
-                        }
-                        menu.scrollable(true)
-                    }),
+                Select::new(&self.settings_ui.language_picker)
+                    .placeholder(crate::i18n::display_name(&crate::i18n::current_language()))
+                    .w(rems(16.0))
+                    .max_w_full()
+                    .menu_max_h(menu_height),
             )
             .child(self.settings_label(
                 &t("Interface font size — all UI text except the terminal"),
