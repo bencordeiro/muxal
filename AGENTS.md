@@ -269,8 +269,12 @@ As of **v0.5.4** (tag `d1a01a4`, published and promoted):
   when absent from PATH (Settings shows missing tools; launch menus filter them).
   The user has authorized this release and its normal promotion ritual following
   their dev reviews. Earlier "promotion unapproved" notes below describe the
-  previous state; do not ask again. Complete the gates, version bump, tagged
-  release, published-asset verification, and atomic promotion. Never restart main.
+  previous state; do not ask again. Master now includes the completed dev work;
+  the app and macOS bundle versions are bumped to 0.5.5. The final gate passed:
+  formatting, strict Clippy, 599 active Rust tests (one manual benchmark ignored),
+  build, 644-key i18n check, and isolated-HOME smoke. The built binary reports
+  0.5.5. Tagged release, published-asset verification, and atomic promotion remain.
+  Never restart main.
 
 - **Release content:** manual agent handoffs, the compact sidebar **input** label
   and Pi prompt lifecycle binding, terminal search ownership/stale-match fixes,
