@@ -28,6 +28,8 @@ uuid.workspace = true
 serde_json.workspace = true
 # Shared UI/background channels (already in the tree via muxal-terminal).
 async-channel = "2.3"
+# Playback only; no recording, network media, or unused codecs.
+rodio = { version = "0.22.2", default-features = false, features = ["playback", "mp3", "flac", "vorbis", "wav"] }
 notify-rust = "4"
 # debug-embed: always bake files into the binary, even in debug builds.
 # Without this, rust-embed reads icons from disk under CARGO_MANIFEST_DIR
@@ -87,7 +89,7 @@ priority = "optional"
 # When a native dependency changes, re-run
 # `dpkg-shlibdeps -O -e target/release/muxal` and update this list. Use `t64 | old`
 # alternatives if a future dependency has a renamed runtime package.
-depends = "libc6 (>= 2.35), libgcc-s1 (>= 4.2), libxcb1 (>= 1.12), libxkbcommon-x11-0 (>= 0.5.0), libxkbcommon0 (>= 0.5.0)"
+depends = "libasound2t64 (>= 1.0.29) | libasound2 (>= 1.0.29), libc6 (>= 2.35), libgcc-s1 (>= 4.2), libxcb1 (>= 1.12), libxkbcommon-x11-0 (>= 0.5.0), libxkbcommon0 (>= 0.5.0)"
 extended-description = """\
 muxal is a terminal multiplexer for managing many AI coding agents (Claude, \
 Ollama, and others) across multiple projects, with split panes, tmux/worktree \
@@ -99,6 +101,12 @@ assets = [
     ["assets/muxal.png", "usr/share/icons/hicolor/256x256/apps/muxal.png", "644"],
     ["../../README.md", "usr/share/doc/muxal/README.md", "644"],
     ["../../LICENSE", "usr/share/doc/muxal/LICENSE", "644"],
+    ["../../LICENSING.md", "usr/share/doc/muxal/LICENSING.md", "644"],
+    ["../../packaging/licenses/README.md", "usr/share/doc/muxal/licenses/README.md", "644"],
+    ["../../packaging/licenses/Rodio-Apache-2.0.txt", "usr/share/doc/muxal/licenses/Rodio-Apache-2.0.txt", "644"],
+    ["../../packaging/licenses/Rodio-MIT.txt", "usr/share/doc/muxal/licenses/Rodio-MIT.txt", "644"],
+    ["../../packaging/licenses/RustAudio-Apache-2.0.txt", "usr/share/doc/muxal/licenses/RustAudio-Apache-2.0.txt", "644"],
+    ["../../packaging/licenses/Symphonia-MPL-2.0.txt", "usr/share/doc/muxal/licenses/Symphonia-MPL-2.0.txt", "644"],
 ]
 
 # --- Linux .rpm packaging (cargo-generate-rpm) ---
@@ -114,4 +122,10 @@ assets = [
     { source = "crates/muxal/assets/muxal.png", dest = "/usr/share/icons/hicolor/256x256/apps/muxal.png", mode = "644" },
     { source = "README.md", dest = "/usr/share/doc/muxal/README.md", mode = "644", doc = true },
     { source = "LICENSE", dest = "/usr/share/doc/muxal/LICENSE", mode = "644", doc = true },
+    { source = "LICENSING.md", dest = "/usr/share/doc/muxal/LICENSING.md", mode = "644", doc = true },
+    { source = "packaging/licenses/README.md", dest = "/usr/share/doc/muxal/licenses/README.md", mode = "644", doc = true },
+    { source = "packaging/licenses/Rodio-Apache-2.0.txt", dest = "/usr/share/doc/muxal/licenses/Rodio-Apache-2.0.txt", mode = "644", doc = true },
+    { source = "packaging/licenses/Rodio-MIT.txt", dest = "/usr/share/doc/muxal/licenses/Rodio-MIT.txt", mode = "644", doc = true },
+    { source = "packaging/licenses/RustAudio-Apache-2.0.txt", dest = "/usr/share/doc/muxal/licenses/RustAudio-Apache-2.0.txt", mode = "644", doc = true },
+    { source = "packaging/licenses/Symphonia-MPL-2.0.txt", dest = "/usr/share/doc/muxal/licenses/Symphonia-MPL-2.0.txt", mode = "644", doc = true },
 ]

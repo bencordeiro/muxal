@@ -110,7 +110,8 @@ jobs:
           stage="muxal-linux-${{ matrix.arch }}"
           mkdir -p "$stage"
           cp target/release/muxal "$stage/"
-          cp README.md LICENSE "$stage/"
+          cp README.md LICENSE LICENSING.md "$stage/"
+          cp -r packaging/licenses "$stage/licenses"
           cp packaging/muxal.desktop "$stage/"
           cp crates/muxal/assets/muxal.svg "$stage/"
           tar -czf "$stage.tar.gz" "$stage"
@@ -123,7 +124,9 @@ jobs:
           export APPIMAGE_EXTRACT_AND_RUN=1
           wget -q "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-${arch}.AppImage"
           chmod +x "linuxdeploy-${arch}.AppImage"
-          mkdir -p AppDir
+          mkdir -p AppDir/usr/share/doc/muxal
+          cp LICENSING.md AppDir/usr/share/doc/muxal/
+          cp -r packaging/licenses AppDir/usr/share/doc/muxal/licenses
 
           "./linuxdeploy-${arch}.AppImage" \
             --appdir AppDir \
@@ -234,6 +237,8 @@ jobs:
             target/aarch64-apple-darwin/release/muxal
           lipo -info "$app/Contents/MacOS/muxal"
           cp packaging/macos/Info.plist "$app/Contents/Info.plist"
+          cp LICENSING.md "$app/Contents/Resources/"
+          cp -r packaging/licenses "$app/Contents/Resources/licenses"
 
           # SVG -> .icns (standard iconset sizes + @2x retina variants).
           mkdir -p muxal.iconset

@@ -11,8 +11,10 @@ pub mod diff;
 pub mod geometry;
 mod gui_path;
 pub mod handoff;
+pub mod keybindings;
 pub mod locale;
 pub mod memory;
+pub mod music;
 mod pane;
 pub mod search;
 mod shell;
@@ -1656,6 +1658,9 @@ pub struct Settings {
     /// Keybinding overrides.
     #[serde(default)]
     pub keybindings: Vec<KeyBindingCfg>,
+    /// Optional local music; disabled for fresh and older settings.
+    #[serde(default)]
+    pub music: music::MusicSettings,
     /// Reusable task launchers.
     #[serde(default = "default_runners")]
     pub runners: Vec<Runner>,
@@ -1911,6 +1916,7 @@ impl Default for Settings {
             minimize_to_tray: false,
             dev_console_enabled: false,
             keybindings: Vec::new(),
+            music: music::MusicSettings::default(),
             runners: Runner::defaults(),
             snippets: Snippet::defaults(),
             loops: Vec::new(),

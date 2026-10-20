@@ -36,6 +36,13 @@ documented in [FEATURES.md](FEATURES.md) and in this repository's git history.
 
 - **gpui** — Zed Industries, Apache-2.0
 - **alacritty_terminal** — Alacritty contributors, Apache-2.0
+- **Rodio** — RustAudio contributors, MIT OR Apache-2.0 (playback only).
+- **CPAL** — RustAudio contributors, Apache-2.0 (native audio output).
+- **Symphonia** — Symphonia contributors, MPL-2.0 (selected local audio decoders).
+  Full audio dependency notices are retained in [packaging/licenses](packaging/licenses/README.md)
+  and included in native release packages.
+  Music test fixtures are original generated silence, with a regeneration script;
+  no third-party music or recordings are bundled.
 - **Some icons in `assets/icons/`** — [Lucide](https://lucide.dev), ISC
 - **Bundled themes** — the curated set from upstream Muxel (GPL-3.0), plus
   original muxal palettes. Clay Dark is inspired by Anthropic's published colors. Neither bundles third-party

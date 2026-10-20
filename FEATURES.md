@@ -685,7 +685,7 @@ feature is added or changed, update the matching entry here in the same change**
 ## Settings & theming
 
 - **Settings modal** — sections for Appearance, Editor, Behavior, Agents,
-  Runners, Snippets, Loops, Projects, and Keybindings. Theme and language pickers
+  Runners, Snippets, Loops, Projects, Keybindings, and Music. Theme and language pickers
   use measured, scrollable choice lists with a height bounded by the current
   window; the full list stays accessible with mouse or keyboard.
 - **Themes** — 20 curated choices: Default Light/Dark, Gruvbox Light/Dark,
@@ -738,6 +738,28 @@ feature is added or changed, update the matching entry here in the same change**
   restarts. The drift is capped at 15%, so text contrast and semantic colors
   (red = error, ANSI hues) stay intact; at 0 the theme is exactly as authored.
   Paint-level only — identical on every platform, no OS window transparency.
+- **Compact keybinding editor** — friendly action names, compact shortcut rows,
+  a Modified only toggle, individual resets, and expandable numbered shortcuts
+  and terminal passthrough. No search or category filters. Drafts survive hiding
+  rows; Apply validates shortcut notation and preserves unrelated custom entries.
+  Reset and Cancel remove superseded live chords while preserving component
+  shortcuts. Cancel restores the pre-edit bindings and terminal passthrough.
+- **Optional local music** — disabled by default, including on older settings.
+  Enable under Settings → Music, select an existing folder, then use Play/Pause
+  and Skip in the sidebar footer above New Project. MP3, FLAC, PCM WAV, and Ogg
+  Vorbis play in relative-path order through subfolders and repeat the folder.
+  Volume and folder refresh live in Settings; files are read in place without
+  creating project files or copying music. Folder, volume, and last track are
+  remembered; ordinary startup stays paused. An independent default-off autoplay
+  option starts on the first project opening, including restored projects.
+  Playback continues through project/window/focus changes and minimize-to-tray;
+  manual pause prevents later automatic starts. Disabling or quitting stops it.
+  One player is shared by a process's windows; main/dev processes are independent.
+  Discovery is bounded/cancellable with explicit partial results and no watches;
+  playback streams the current track. Disabled creates no music worker, scan,
+  timer, or output device. Invalid files/device errors stop or advance with bounded
+  retries; an explicit Play/Refresh retries failures. Linux adds only the ALSA
+  runtime requirement; no streaming service or microphone capture is involved.
 - **Keybindings** — configurable shortcuts with a rebind UI, a cheat-sheet overlay
   (`Ctrl+Shift+/`), `Alt+1–9` to jump to a pane's Nth tab, `Ctrl+1–9` to switch to
   the Nth project, `Ctrl+Alt+1–9` to open a new pane running the Nth agent preset,

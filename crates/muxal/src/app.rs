@@ -4,6 +4,8 @@
 //! `terminals`, keyed by instance id.
 
 mod handoffs;
+mod keybindings;
+mod music;
 mod spider;
 
 use crate::editor::{
@@ -1489,7 +1491,11 @@ pub fn install_keybindings(settings: &muxal_core::Settings, cx: &mut App) {
     // Cmd+Q (macOS) / Ctrl+Q (elsewhere) quits from any focus, including a
     // focused terminal — `secondary` resolves to the platform's quit modifier.
     bindings.push(KeyBinding::new("secondary-q", Quit, None));
-    cx.bind_keys(bindings);
+    // Replace our previous installation, preserving GPUI/component shortcuts.
+    // Appending alone leaves old custom chords active after Reset or Cancel.
+    let retained = keybindings::retain_component_bindings(&cx.key_bindings().borrow());
+    cx.clear_key_bindings();
+    cx.bind_keys(retained.into_iter().chain(bindings));
 }
 
 /// Pick the gpui key context for a binding.
@@ -2227,6 +2233,7 @@ pub struct MuxalApp {
     show_settings: bool,
     /// Settings-page widgets + selection state.
     settings_ui: SettingsUi,
+    music: music::MusicUi,
     /// Whether desktop notifications are enabled.
     notifications_enabled: bool,
     /// In-app notification feed shown in the sidebar (collected regardless of the
@@ -2316,6 +2323,7 @@ pub struct MuxalApp {
     panes_scroll: HashMap<Uuid, ScrollHandle>,
     /// Live state captured on open so the settings Cancel button can revert.
     settings_snapshot: Option<SettingsSnapshot>,
+    settings_focus_return: Option<Uuid>,
     /// The active workspace (None until one is chosen in the selector).
     current_workspace: Option<Uuid>,
     /// All workspaces + the last-used one (for pre-selection).
@@ -3966,6 +3974,14 @@ impl MuxalApp {
             },
         )
         .detach();
+        for (_, input) in &settings_ui.keybinds {
+            cx.subscribe(input, |_, _, event, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                }
+            })
+            .detach();
+        }
         let rename_input = cx.new(|cx| InputState::new(window, cx));
         let dispose_commit_input = cx.new(|cx| {
             InputState::new(window, cx).placeholder(t("Commit message (default: worktree name)"))
@@ -4187,6 +4203,7 @@ impl MuxalApp {
             memory_confirm_delete: None,
             show_settings: false,
             settings_ui,
+            music: music::MusicUi::default(),
             rename: None,
             rename_origin: None,
             rename_input,
@@ -4195,6 +4212,7 @@ impl MuxalApp {
             settings_scroll: ScrollHandle::new(),
             panes_scroll: HashMap::new(),
             settings_snapshot: None,
+            settings_focus_return: None,
             current_workspace: None,
             workspaces,
             show_workspace_selector: true,
@@ -4297,6 +4315,7 @@ impl MuxalApp {
         // Flush any coalesced auto-title before shutdown. On Unix, muxal also
         // hands tmux's exit policy back so it exits with its last session.
         cx.on_app_quit(|this, _cx| {
+            this.music.service_stop();
             this.persist();
             if cfg!(unix) {
                 integrations::restore_tmux_exit_empty();
@@ -5620,6 +5639,10 @@ impl MuxalApp {
         // An empty workspace starts with no projects — the user adds one with the
         // sidebar's New Project button (no auto-creation in the current folder).
         self.show_workspace_selector = false;
+        self.sync_music(cx);
+        if !self.workspace.projects.is_empty() {
+            self.music_project_opened(cx);
+        }
         cx.notify();
     }
 
@@ -5693,6 +5716,7 @@ impl MuxalApp {
         self.workspace.add_instance(instance);
         self.workspace.add_project(project);
         self.workspace.active_project = Some(pid);
+        self.music_project_opened(cx);
         // Point the open file browser at the new project right away.
         if self.show_file_browser {
             self.load_file_browser(pid, cx);
@@ -5746,6 +5770,7 @@ impl MuxalApp {
         cx: &mut Context<Self>,
     ) {
         let _phase = ui_profile::phase("workspace", "select-project", None);
+        self.music_project_opened(cx);
         // Multi-window routing: a project shown in another window is RAISED, not
         // stolen (one project renders in exactly one window at a time).
         let this_window = window.window_handle().window_id();
@@ -16065,7 +16090,8 @@ impl MuxalApp {
         let entity = cx.entity();
         let mut list = div()
             .id("sidebar-scroll")
-            .size_full()
+            .flex_1()
+            .min_h_0()
             .overflow_y_scroll()
             .flex()
             .flex_col()
@@ -16894,29 +16920,37 @@ impl MuxalApp {
             }
         }
 
-        list.child(div().flex_1()).child(
-            div()
-                .p_2()
-                .flex()
-                .items_center()
-                .gap_1()
-                .w_full()
-                .min_w_0()
-                // "New Project" takes the available width and may shrink; the
-                // remote-SSH icon button is fixed so it's never clipped at a
-                // narrow sidebar width.
-                .child(
-                    div().flex_1().min_w_0().overflow_hidden().child(
-                        Button::new("new-project")
-                            .ghost()
-                            .icon(IconName::Plus)
-                            .label(t("New Project"))
-                            .on_click(cx.listener(|this, _ev, window, cx| {
-                                this.new_project_dialog(window, cx);
-                            })),
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(cx.theme().sidebar)
+            .child(list)
+            .child(self.render_music_footer(cx))
+            .child(
+                div()
+                    .p_2()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .w_full()
+                    .min_w_0()
+                    // "New Project" takes the available width and may shrink; the
+                    // remote-SSH icon button is fixed so it's never clipped at a
+                    // narrow sidebar width.
+                    .child(
+                        div().flex_1().min_w_0().overflow_hidden().child(
+                            Button::new("new-project")
+                                .ghost()
+                                .icon(IconName::Plus)
+                                .label(t("New Project"))
+                                .on_click(cx.listener(|this, _ev, window, cx| {
+                                    this.new_project_dialog(window, cx);
+                                })),
+                        ),
                     ),
-                ),
-        )
+            )
     }
 
     /// The pane/agent controls (preset split-button, Run task, Loops, Snippets,
@@ -17665,7 +17699,13 @@ impl MuxalApp {
     }
 
     fn toggle_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.show_settings = !self.show_settings;
+        if self.show_settings {
+            self.close_settings(window, cx);
+            return;
+        }
+        self.show_settings = true;
+        self.settings_focus_return = self.active_instance;
+        window.focus(&self.focus_handle, cx);
         if self.show_settings {
             // Size the modal for the current UI scale (font size × zoom) so the
             // content isn't cramped when scaled up. The corner-drag can override.
@@ -17687,20 +17727,26 @@ impl MuxalApp {
         cx.notify();
     }
 
-    fn close_settings(&mut self, cx: &mut Context<Self>) {
+    fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.show_settings = false;
         self.settings_snapshot = None;
+        match self.settings_focus_return.take() {
+            Some(iid) if self.workspace.instance(iid).is_some() => {
+                self.focus_instance(iid, window, cx)
+            }
+            _ => self.deselect_pane(window, cx),
+        }
         cx.notify();
     }
 
     /// Keep all edits (they applied live + persisted) and dismiss.
-    fn save_settings(&mut self, cx: &mut Context<Self>) {
+    fn save_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.persist_settings();
-        self.close_settings(cx);
+        self.close_settings(window, cx);
     }
 
     /// Revert settings to the snapshot taken when the modal opened, then dismiss.
-    fn cancel_settings(&mut self, cx: &mut Context<Self>) {
+    fn cancel_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(snap) = self.settings_snapshot.take() {
             self.settings = snap.settings;
             self.presets = snap.presets;
@@ -17718,11 +17764,13 @@ impl MuxalApp {
             theme::set_ui_scale(zoom, cx);
             self.refresh_terminal_config(cx);
             self.refresh_terminal_palettes(cx);
-            self.apply_keybindings(cx);
+            install_keybindings(&self.settings, cx);
+            self.load_keybinding_inputs(window, cx);
             self.persist_settings();
         }
         self.sync_spiders(cx);
-        self.close_settings(cx);
+        self.sync_music(cx);
+        self.close_settings(window, cx);
     }
 
     fn load_appearance_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -18704,6 +18752,7 @@ impl MuxalApp {
             });
             input.update(cx, |s, cx| s.set_value(ks, window, cx));
         }
+        self.settings_ui.key_error = None;
         let pass = self.settings.terminal_passthrough_keys.join(", ");
         self.settings_ui
             .passthrough_keys
@@ -18711,27 +18760,44 @@ impl MuxalApp {
     }
 
     fn apply_keybindings(&mut self, cx: &mut Context<Self>) {
-        let mut cfgs = Vec::new();
-        for (name, input) in &self.settings_ui.keybinds {
-            let ks = input.read(cx).value().trim().to_string();
-            if !ks.is_empty() {
-                cfgs.push(muxal_core::KeyBindingCfg {
-                    action: name.clone(),
-                    keystroke: ks,
-                });
+        let draft: Vec<_> = self
+            .settings_ui
+            .keybinds
+            .iter()
+            .map(|(name, input)| (name.clone(), input.read(cx).value().trim().to_string()))
+            .collect();
+        let pass = self
+            .settings_ui
+            .passthrough_keys
+            .read(cx)
+            .value()
+            .to_string();
+        let passthrough: Vec<String> = pass
+            .split([',', ' ', '\n'])
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+        for value in draft
+            .iter()
+            .map(|(_, value)| value.as_str())
+            .chain(passthrough.iter().map(String::as_str))
+        {
+            if value
+                .split_whitespace()
+                .any(|chord| Keystroke::parse(chord).is_err())
+            {
+                self.settings_ui.key_error =
+                    Some(tf("Invalid shortcut: {shortcut}", &[("shortcut", value)]).to_string());
+                cx.notify();
+                return;
             }
         }
-        self.settings.keybindings = cfgs;
-        // Terminal pass-through chords (comma/space/newline separated).
-        let pass = self.settings_ui.passthrough_keys.read(cx).value().clone();
-        self.settings.terminal_passthrough_keys = pass
-            .split([',', ' ', '\n'])
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string())
-            .collect();
-        let snapshot = self.settings.clone();
-        install_keybindings(&snapshot, cx);
+        self.settings.keybindings =
+            muxal_core::keybindings::apply_draft(&self.settings.keybindings, &draft);
+        self.settings.terminal_passthrough_keys = passthrough;
+        self.settings_ui.key_error = None;
+        install_keybindings(&self.settings, cx);
         self.persist_settings();
         cx.notify();
     }
@@ -19943,7 +20009,7 @@ impl MuxalApp {
         modal_backdrop()
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _ev, _w, cx| this.close_settings(cx)),
+                cx.listener(|this, _ev, _w, cx| this.close_settings(_w, cx)),
             )
             .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _w, cx| {
                 if let Some((start, base)) = this.settings_resize {
@@ -20017,7 +20083,7 @@ impl MuxalApp {
                                             .icon(IconName::Close)
                                             .tooltip(t("Close"))
                                             .on_click(cx.listener(|this, _ev, _w, cx| {
-                                                this.close_settings(cx)
+                                                this.close_settings(_w, cx)
                                             })),
                                     ),
                             ),
@@ -20043,17 +20109,17 @@ impl MuxalApp {
                                 Button::new("settings-cancel")
                                     .ghost()
                                     .label(t("Cancel"))
-                                    .on_click(
-                                        cx.listener(|this, _e, _w, cx| this.cancel_settings(cx)),
-                                    ),
+                                    .on_click(cx.listener(|this, _e, window, cx| {
+                                        this.cancel_settings(window, cx)
+                                    })),
                             )
                             .child(
                                 Button::new("settings-save")
                                     .primary()
                                     .label(t("Save"))
-                                    .on_click(
-                                        cx.listener(|this, _e, _w, cx| this.save_settings(cx)),
-                                    ),
+                                    .on_click(cx.listener(|this, _e, window, cx| {
+                                        this.save_settings(window, cx)
+                                    })),
                             )
                     }))
                     .child(
@@ -20121,6 +20187,7 @@ impl MuxalApp {
             (t("Loops"), SettingsSection::Loops),
             (t("Projects"), SettingsSection::Projects),
             (t("Keybindings"), SettingsSection::Keybindings),
+            (t("Music"), SettingsSection::Music),
         ];
         let mut nav = v_flex()
             .w(rems(10.0))
@@ -20129,10 +20196,12 @@ impl MuxalApp {
             .gap_1()
             .bg(cx.theme().sidebar);
         for (label, section) in sections {
-            nav = nav.child(
-                nav_item(label, section)
-                    .on_click(cx.listener(move |this, _e, _w, cx| this.set_section(section, cx))),
-            );
+            nav = nav.child(nav_item(label, section).on_click(cx.listener(
+                move |this, _e, window, cx| {
+                    window.focus(&this.focus_handle, cx);
+                    this.set_section(section, cx);
+                },
+            )));
         }
         // The version number, tucked into the nav column's bottom-left corner.
         nav = nav.child(div().flex_1()).child(
@@ -20154,7 +20223,17 @@ impl MuxalApp {
             SettingsSection::Snippets => self.render_settings_snippets(cx),
             SettingsSection::Loops => self.render_settings_loops(cx),
             SettingsSection::Projects => self.render_settings_projects(cx),
-            SettingsSection::Keybindings => self.render_settings_keybindings(content_w, cx),
+            SettingsSection::Keybindings => self.render_settings_keybindings(
+                content_w,
+                (self
+                    .settings_size
+                    .height
+                    .min(window.viewport_size().height * 0.9)
+                    - px(300.0))
+                .max(px(180.0)),
+                cx,
+            ),
+            SettingsSection::Music => self.render_settings_music(cx),
         };
 
         div()
@@ -21468,70 +21547,6 @@ impl MuxalApp {
                     ),
             )
             .into_any_element()
-    }
-
-    fn render_settings_keybindings(&self, content_w: Pixels, cx: &mut Context<Self>) -> AnyElement {
-        // gpui-component `Input`s only size reliably with an ABSOLUTE width here:
-        // inside the settings `overflow_y_scroll` pane, percentage/flex widths
-        // collapse to a tiny square (this is exactly how the new-remote dialog's
-        // `div().w(px(460))` card sizes its inputs). `content_w` is the pane's
-        // definite inner width; derive the form/input widths from it.
-        let form_w = {
-            let r = content_w - px(32.0); // the inner block's p_4 (both sides)
-            if r < px(280.0) { px(280.0) } else { r }
-        };
-        let name_w = px(150.0);
-        let input_w = {
-            let r = form_w - name_w - px(16.0);
-            if r < px(120.0) { px(120.0) } else { r }
-        };
-        let mut form = v_flex().gap_2().w(form_w);
-        for (name, input) in &self.settings_ui.keybinds {
-            form = form.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .child(div().w(name_w).flex_none().text_sm().child(name.clone()))
-                    .child(div().w(input_w).child(Input::new(input))),
-            );
-        }
-        let form = form
-            .child(
-                div()
-                    .pt_2()
-                    .child(
-                        self.settings_label(&t("Pass these keys through to the focused terminal"), cx),
-                    )
-                    .child(div().w(form_w).child(Input::new(&self.settings_ui.passthrough_keys))),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(
-                        "Comma-separated extra chords (e.g. ctrl-shift-p). Plain ctrl+letter app \
-                 shortcuts already yield to the terminal by default so agents get them \
-                 (Ctrl+S stash, etc.).",
-                    ),
-            )
-            .child(
-                div().pt_2().flex().items_center().gap_3().child(
-                    Button::new("apply-keys")
-                        .primary()
-                        .label(t("Apply keybindings"))
-                        .on_click(cx.listener(|this, _e, _w, cx| this.apply_keybindings(cx))),
-                ),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(
-                        t("Examples: ctrl-shift-t, cmd-w, ctrl-shift-up. Applied immediately + saved."),
-                    ),
-            );
-        form.into_any_element()
     }
 }
 

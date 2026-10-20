@@ -19,71 +19,7 @@ use uuid::Uuid;
 /// (Claude Ctrl+S stash, shells Ctrl+R, …). `install_keybindings` auto-scopes
 /// those to `!Terminal` unless the action is in [`KEEP_GLOBAL_WHILE_TERMINAL`].
 /// Prefer `ctrl-shift-*` for muxal chrome.
-pub const DEFAULT_KEYBINDINGS: &[(&str, &str, Option<&str>)] = &[
-    ("NewPane", "ctrl-shift-t", None),
-    // Keep global while a terminal is focused (see KEEP_GLOBAL_WHILE_TERMINAL).
-    ("NewTab", "ctrl-t", None),
-    ("TabNext", "ctrl-tab", None),
-    ("TabPrev", "ctrl-shift-tab", None),
-    ("SplitRight", "ctrl-shift-l", None),
-    ("SplitDown", "ctrl-shift-j", None),
-    ("ClosePane", "ctrl-shift-w", None),
-    ("FocusNext", "ctrl-shift-]", None),
-    ("FocusPrev", "ctrl-shift-[", None),
-    ("FocusLeft", "ctrl-alt-left", None),
-    ("FocusRight", "ctrl-alt-right", None),
-    ("FocusUp", "ctrl-alt-up", None),
-    ("FocusDown", "ctrl-alt-down", None),
-    ("ZoomIn", "ctrl-shift-up", None),
-    ("ZoomOut", "ctrl-shift-down", None),
-    ("ToggleSidebar", "ctrl-shift-b", None),
-    ("ToggleDashboard", "ctrl-shift-e", None),
-    ("ToggleSettings", "ctrl-shift-,", None),
-    // Ctrl+P also opens it when no terminal is focused (see install_keybindings),
-    // leaving Ctrl+P free for the terminal agent (e.g. opencode's commands).
-    ("GlobalSearch", "ctrl-shift-p", None),
-    ("FindInProject", "ctrl-shift-f", None),
-    // Same key as FindInProject but scoped to a focused terminal (searches it).
-    ("SearchTerminal", "ctrl-shift-f", Some("Terminal")),
-    ("ClearTerminal", "ctrl-shift-k", None),
-    ("FocusAttention", "ctrl-shift-a", None),
-    ("ShowKeys", "ctrl-shift-/", None),
-    ("ToggleBroadcast", "ctrl-shift-i", None),
-    // Toggle the toolbar's "new agents get a git worktree" switch.
-    ("ToggleWorktree", "ctrl-shift-g", None),
-    // OS fullscreen; the sidebar hides until revealed or fullscreen exits.
-    ("ToggleFullScreen", "f11", None),
-    ("ToggleDevConsole", "f12", None),
-    // Editor save — auto !Terminal so Claude stash (Ctrl+S) reaches the PTY.
-    ("SaveFile", "ctrl-s", None),
-    ("SaveFileAs", "ctrl-shift-s", None),
-    ("JumpToTab1", "alt-1", None),
-    ("JumpToTab2", "alt-2", None),
-    ("JumpToTab3", "alt-3", None),
-    ("JumpToTab4", "alt-4", None),
-    ("JumpToTab5", "alt-5", None),
-    ("JumpToTab6", "alt-6", None),
-    ("JumpToProject1", "ctrl-1", None),
-    ("JumpToProject2", "ctrl-2", None),
-    ("JumpToProject3", "ctrl-3", None),
-    ("JumpToProject4", "ctrl-4", None),
-    ("JumpToProject5", "ctrl-5", None),
-    ("JumpToProject6", "ctrl-6", None),
-    ("JumpToProject7", "ctrl-7", None),
-    ("JumpToProject8", "ctrl-8", None),
-    ("JumpToProject9", "ctrl-9", None),
-    // New pane running the Nth agent preset (in the preset-list order; drag
-    // the list in Settings → Agents to change it).
-    ("NewAgent1", "ctrl-alt-1", None),
-    ("NewAgent2", "ctrl-alt-2", None),
-    ("NewAgent3", "ctrl-alt-3", None),
-    ("NewAgent4", "ctrl-alt-4", None),
-    ("NewAgent5", "ctrl-alt-5", None),
-    ("NewAgent6", "ctrl-alt-6", None),
-    // Cycle the pinned projects (top-bar slots), wrapping.
-    ("CycleProjects", "alt-p", None),
-    ("CycleProjectsPrev", "alt-shift-p", None),
-];
+pub use muxal_core::keybindings::DEFAULT_KEYBINDINGS;
 
 /// Actions whose plain `ctrl-<letter>` binding stays live while a terminal is
 /// focused. Everything else with that shape is scoped to `!Terminal`.
@@ -103,6 +39,7 @@ pub enum SettingsSection {
     Loops,
     Projects,
     Keybindings,
+    Music,
 }
 
 /// Editable widgets + selection state for the settings page.
@@ -172,6 +109,10 @@ pub struct SettingsUi {
     pub keybinds: Vec<(String, Entity<InputState>)>,
     /// Comma/space-separated chords passed through to a focused terminal.
     pub passthrough_keys: Entity<InputState>,
+    pub keys_modified_only: bool,
+    pub keys_numbered_open: bool,
+    pub keys_passthrough_open: bool,
+    pub key_error: Option<String>,
 }
 
 impl SettingsUi {
@@ -268,6 +209,10 @@ impl SettingsUi {
             }),
             editor_font_family: cx
                 .new(|cx| InputState::new(window, cx).placeholder(t("theme monospace"))),
+            keys_modified_only: false,
+            keys_numbered_open: false,
+            keys_passthrough_open: false,
+            key_error: None,
             keybinds: DEFAULT_KEYBINDINGS
                 .iter()
                 .map(|(name, default, _ctx)| {

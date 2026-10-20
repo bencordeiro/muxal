@@ -32,7 +32,8 @@ develops itself (installed main + sandboxed dev).
   ./target/release/muxal`. It uses your **real** workspace, so it's for quick
   checks; for parallel/sandboxed testing use `scripts/dev.sh` instead.
 - **Linux system deps** — a Wayland or X11 stack, `libxkbcommon`,
-  fontconfig/freetype, and D-Bus (desktop notifications + tray). `git` and
+  fontconfig/freetype, ALSA (`libasound2t64` or `libasound2`, for optional local
+  music playback), and D-Bus (desktop notifications + tray). `git` and
   `tmux` are optional integrations; each agent CLI is installed separately.
 
 ## Update

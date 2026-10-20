@@ -262,6 +262,33 @@ add a new `##` category if none fits).
 
 As of **v0.5.5** (tag `3fb4610`, published and promoted; verified 2026-10-20):
 
+- **Music/keybindings implementation (2026-10-20):** authorized and implemented
+  on `dev/music-keybindings`; see `docs/music-and-keybindings-plan.md`. No search
+  or category filters: compact friendly rows, Modified only, individual resets,
+  expandable numbered shortcuts/passthrough. Apply preserves unknown overrides;
+  Reset/Cancel replace old live chords while preserving GPUI bindings. Settings
+  now restores focus on close and rollback reinstalls the saved snapshot.
+  Music is fully disabled by default: no worker/scan/device/timer while off.
+  Settings → Music chooses an existing folder; sidebar controls above New Project
+  provide Play/Pause and Skip, with volume and refresh in Settings. One player
+  serves the process's windows, with bounded discovery and streaming MP3/FLAC/
+  PCM WAV/Ogg Vorbis. Separate default-off autoplay starts once on project open;
+  manual pause wins over later switches. No activity/focus sensor or automatic
+  pause. Disable/quit releases resources. Main/dev processes remain independent.
+  The local Linux gate passes 615 active tests, including generated four-format
+  decode fixtures, bounded failure/queue tests, and silent native ALSA lifecycle.
+  The isolated-HOME GUI smoke passes with no music worker/device while disabled.
+  Rodio is playback-only with selected codecs; Linux adds ALSA, with t64/old
+  alternatives in .deb and full audio license notices in native packages.
+  Human layout/listening review is pending; macOS native playback needs validation
+  before a release. The local .deb builds with all audio notices and resolving
+  libraries. Final stripped Linux binary growth is about 1.56 MiB (1.84%), or
+  425 KiB after gzip. The running review sandbox is `.muxal-dev/music-review`
+  via `scripts/dev.sh`; the user controls its music choices.
+  Main is unchanged; no promotion/version bump/release is
+  authorized. Do not automate desktop review or play audible test music.
+  The user's next idea is subtle optional navigation/workflow sound effects;
+  record/design separately after this review, not implemented in this change.
 - **Release complete:** Spider maps and Phase 2, Rust/JS/TS/JSX/TSX/Python import
   connections, brighter Default Dark, Clay Dark, subtle Clay/Fahrenheit surface
   lifts, measured appearance pickers, Antigravity and Aider presets, and complete
