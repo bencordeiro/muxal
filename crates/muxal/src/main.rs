@@ -8,9 +8,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
-mod browser;
-#[cfg(target_os = "linux")]
-mod browser_helper;
 mod editor;
 mod filetree;
 mod i18n;
@@ -51,7 +48,7 @@ fn nvm_node_bin_dir(home: Option<&str>) -> Option<String> {
 
 /// Persist panic details even when the GUI executable has no useful stderr.
 ///
-/// Panics inside a native WebView/COM callback abort after the hook runs because
+/// Panics inside a native platform callback abort after the hook runs because
 /// unwinding cannot cross that boundary. Windows Error Reporting then records
 /// only `std::process::abort`, so without this file the actual Rust caller is
 /// lost.
@@ -240,30 +237,6 @@ fn main() {
     // a multiplexer needs (256 on macOS).
     #[cfg(unix)]
     raise_open_file_limit();
-
-    // Linux built-in browser: `muxal --browser <url>` relaunches this binary as
-    // a standalone WebKitGTK window (gpui can't host one — see browser_helper).
-    // Must run before anything gpui-related initializes.
-    #[cfg(target_os = "linux")]
-    if std::env::args().nth(1).as_deref() == Some("--browser") {
-        match std::env::args().nth(2) {
-            Some(url) => browser_helper::run(&url),
-            None => {
-                eprintln!("usage: muxal --browser <url>");
-                std::process::exit(2);
-            }
-        }
-    }
-
-    // Windows: the embedded WebView2 browser pane can't share a surface with
-    // gpui's DirectComposition path; when the browser is enabled, switch gpui to
-    // its non-DirectComposition compositor before it initializes. (Read-only
-    // early settings load; the app loads them again normally later.)
-    #[cfg(target_os = "windows")]
-    if muxal_store::load_settings().browser_enabled {
-        // SAFETY: at the top of main, before any thread is spawned.
-        unsafe { std::env::set_var("GPUI_DISABLE_DIRECT_COMPOSITION", "true") };
-    }
 
     // A macOS Dock/Finder launch inherits a minimal launchd PATH that omits
     // Homebrew and ~/.local/bin, so installed agents would be hidden from the

@@ -39,7 +39,7 @@ pub fn save_settings(settings: &Settings) -> Result<()> {
 /// Load settings from an explicit path (defaults on missing/invalid).
 pub fn load_settings_from(path: &Path) -> Settings {
     match std::fs::read_to_string(path) {
-        Ok(text) => toml::from_str(&text).unwrap_or_else(|e| {
+        Ok(text) => muxal_core::compat::settings_from_toml(&text).unwrap_or_else(|e| {
             log::warn!("ignoring invalid config at {}: {e}", path.display());
             Settings::default()
         }),
@@ -198,7 +198,7 @@ pub fn save_workspace(workspace: &Workspace) -> Result<()> {
 /// Load a workspace from an explicit path (returns `None` on missing/invalid).
 pub fn load_workspace_from(path: &Path) -> Option<Workspace> {
     let data = std::fs::read_to_string(path).ok()?;
-    match serde_json::from_str(&data) {
+    match muxal_core::compat::workspace_from_json(&data) {
         Ok(workspace) => Some(workspace),
         Err(e) => {
             log::warn!("ignoring unreadable workspace at {}: {e}", path.display());
@@ -427,6 +427,51 @@ mod tests {
         assert_eq!(loaded.width, 800.0);
         assert_eq!(loaded.x, 10.0);
         assert!(loaded.maximized);
+    }
+
+    #[test]
+    fn retired_browser_data_loads_without_rewriting_files_until_saved() {
+        let dir = std::env::temp_dir().join(format!("muxal-store-retired-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("workspace.json");
+        let config = dir.join("config.toml");
+        let mut project = Project::new("kept", "/repo");
+        let terminal = Instance::shell(project.id);
+        let retired = Uuid::new_v4();
+        project.layout = Some(PaneNode::leaf(terminal.id));
+        muxal_core::add_tab(&mut project.layout, terminal.id, retired);
+        project.last_focused_instance = Some(retired);
+        let original = serde_json::json!({
+            "projects": [project], "active_project": project.id,
+            "instances": [terminal, {"id": retired, "kind": "Browser", "browser_url": "https://example.com"}]
+        }).to_string();
+        std::fs::write(&path, &original).unwrap();
+        let original_config = "theme = 'Clay Dark'\nfont_size = 18\nbrowser_enabled = true\n[[presets]]\nname = 'My agent'\nprogram = 'agent'\n[[presets]]\nname = 'Web'\nkind = 'Browser'\nurl = 'https://example.com'\n";
+        std::fs::write(&config, original_config).unwrap();
+        let workspace = load_workspace_from(&path).expect("old workspace still loads");
+        let settings = load_settings_from(&config);
+        assert_eq!(workspace.instances.len(), 1);
+        assert_eq!(workspace.projects[0].instances(), vec![terminal.id]);
+        assert_eq!(settings.presets.len(), 1);
+        assert_eq!(settings.presets[0].name, "My agent");
+        assert_eq!(settings.theme, "Clay Dark");
+        assert_eq!(settings.font_size, 18.0);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), original_config);
+        save_workspace_to(&path, &workspace).unwrap();
+        save_settings_to(&config, &settings).unwrap();
+        assert!(
+            !std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("browser_url")
+        );
+        assert!(
+            !std::fs::read_to_string(&config)
+                .unwrap()
+                .contains("browser_enabled")
+        );
+        assert_eq!(load_workspace_from(&path).unwrap().instances.len(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

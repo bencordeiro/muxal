@@ -80,8 +80,7 @@ const TERM_INSET: Pixels = px(6.0);
 
 /// Open a link the user ctrl+clicked in a terminal — an `http(s)://` URL or a
 /// `file://` URI for an existing local file. Dispatched by the terminal element
-/// and handled by the app, which routes URLs to the built-in browser (when
-/// enabled) or the OS.
+/// and handled by the app: local files open in the editor; other URLs use the OS.
 #[derive(Action, Clone, PartialEq)]
 #[action(namespace = terminal, no_json)]
 pub struct OpenLink(pub String);

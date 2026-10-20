@@ -26,8 +26,7 @@ anyhow.workspace = true
 log.workspace = true
 uuid.workspace = true
 serde_json.workspace = true
-# `muxal ctl` requests reach the UI thread over this (already in the tree via
-# muxal-terminal).
+# Shared UI/background channels (already in the tree via muxal-terminal).
 async-channel = "2.3"
 notify-rust = "4"
 # debug-embed: always bake files into the binary, even in debug builds.
@@ -54,15 +53,9 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-# --- Built-in browser (system webview via wry; no bundled Chromium) ---
-# macOS/Windows: an embedded in-pane webview via gpui-component's gpui-wry
-# (WKWebView / WebView2 as a native child of the gpui window). Pinned to the
-# same gpui-component rev so the `gpui` types unify.
-# Present pump (see `spawn_present_pump` in main.rs): the same `windows` crate
-# version gpui_windows already pins, so this adds nothing new to the tree.
+# Native focus/presentation diagnostics; these versions are already used by GPUI.
 [target.'cfg(target_os = "windows")'.dependencies]
-webview2-com = "=0.38.2"
-windows-webview = { package = "windows", version = "0.61" }
+raw-window-handle = "0.6"
 windows = { version = "0.57", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
@@ -73,19 +66,6 @@ windows = { version = "0.57", features = [
     "Win32_System_Threading",
     "Win32_UI_WindowsAndMessaging",
 ] }
-
-[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
-gpui-wry = { git = "https://github.com/longbridge/gpui-component", rev = "3cb3cc139619ce704387b69deb17822b0fc22497" }
-# The same lb-wry release gpui-wry pins, so the `wry` types unify.
-wry = { version = "0.53.3", package = "lb-wry" }
-
-# Linux: gpui can't host a WebKitGTK child (no GTK loop; XEmbed is X11-only), so
-# the browser is a separate muxal-managed window: `muxal --browser <url>` runs a
-# WebKitGTK window via wry + gtk (see browser_helper.rs). lb-wry is the same wry
-# lineage gpui-wry uses; gtk 0.18 is the matching gtk-rs release.
-[target.'cfg(target_os = "linux")'.dependencies]
-wry = { version = "0.53.3", package = "lb-wry" }
-gtk = "0.18"
 
 # Embeds the .exe icon (see build.rs); Windows build-host only, so it never
 # affects the Linux/macOS builds.
@@ -101,16 +81,13 @@ maintainer = "ProjectHax LLC"
 copyright = "2026, ProjectHax LLC"
 section = "utils"
 priority = "optional"
-# NOT `$auto`: cargo-deb resolves it against the *build host*, and the release
-# builds on Ubuntu 22.04 — whose pre-t64 names (libglib2.0-0, libgtk-3-0) no
-# longer exist on Ubuntu 24.04+/Debian 13, so the .deb refused to install on
-# exactly the systems it targets. Hand-maintained below, with `t64 | old`
-# fallbacks so both package-name generations resolve. Derived from
-# `dpkg-shlibdeps -O -e target/release/muxal` on our built binary (our link
-# line is smaller than a stock desktop app's — no audio/DBus/libstdc++).
-# Nothing regenerates this list: when a native dependency is added, re-run
-# dpkg-shlibdeps and update it here.
-depends = "libc6 (>= 2.35), libgcc-s1 (>= 4.2), libglib2.0-0t64 | libglib2.0-0 (>= 2.65.1), libgtk-3-0t64 | libgtk-3-0 (>= 3.9.10), libjavascriptcoregtk-4.1-0, libsoup-3.0-0 (>= 3.0.3), libwebkit2gtk-4.1-0 (>= 2.35.1), libxcb1 (>= 1.12), libxkbcommon-x11-0 (>= 0.5.0), libxkbcommon0 (>= 0.5.0)"
+# Hand-maintained against the native link closure; never regenerate with `$auto`
+# on the release build host. Keep the Ubuntu 22.04 minimums used by CI. The
+# retired browser's GTK/GLib/WebKit/JavaScriptCore/libsoup requirements are gone.
+# When a native dependency changes, re-run
+# `dpkg-shlibdeps -O -e target/release/muxal` and update this list. Use `t64 | old`
+# alternatives if a future dependency has a renamed runtime package.
+depends = "libc6 (>= 2.35), libgcc-s1 (>= 4.2), libxcb1 (>= 1.12), libxkbcommon-x11-0 (>= 0.5.0), libxkbcommon0 (>= 0.5.0)"
 extended-description = """\
 muxal is a terminal multiplexer for managing many AI coding agents (Claude, \
 Ollama, and others) across multiple projects, with split panes, tmux/worktree \

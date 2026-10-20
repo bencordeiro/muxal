@@ -1404,7 +1404,7 @@ impl TerminalElement {
 
         // ---- Ctrl/Cmd+click: open the link (OSC 8 / URL / file path) under the
         // cursor. Dispatched as an action so the app decides where it opens
-        // (built-in browser vs the OS).
+        // (local editor or the OS URL handler).
         {
             let session = self.session.clone();
             let hitbox = hitbox.clone();

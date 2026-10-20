@@ -1,7 +1,7 @@
 # Theme collection review
 
 The collection had 19 public choices before this review. Default Dark remains
-the fresh-install default; these additions do not change saved selections.
+the fresh-install default; the added theme does not change saved selections.
 
 | Theme | Character |
 | --- | --- |
@@ -25,29 +25,26 @@ the fresh-install default; these additions do not change saved selections.
 | Tokyo Dark | Deep indigo, electric blue, cyan, and pink |
 | Twilight Grey | Neutral dark surfaces and muted gold/sage |
 
-## Workbench Dark
+## Classic editor comparison
 
-The missing familiar editor family was Visual Studio / VS Code Dark+: neutral
-graphite with blue keywords, jade types, warm orange strings, pale-gold functions,
-and sky-blue properties. Workbench Dark is an original Muxal palette using that
-color vocabulary, with layered chrome and readable terminal/status colors.
-
-Reference: Microsoft's official
-[Dark+ syntax palette](https://github.com/microsoft/vscode/blob/main/extensions/theme-defaults/themes/dark_plus.json)
-and [Dark Visual Studio palette](https://github.com/microsoft/vscode/blob/main/extensions/theme-defaults/themes/dark_vs.json).
-The theme JSON is authored here; no theme files or branding assets were copied.
+A Workbench Dark candidate used the familiar Visual Studio / VS Code color
+vocabulary. The user found its overall appearance too similar to Default Dark
+and Alduin, so it was removed after review. The existing collection already
+covers that neutral editor appearance; another near-duplicate adds little.
 
 ## Clay Dark
 
 The user also requested a theme close to Claude. Clay Dark pairs warm charcoal
 surfaces with ivory text and the terracotta accent `#D97757`, with restrained sage,
 blue, and sand for syntax and terminal colors. It retains Muxal's normal fonts
-and layout. The original palette is inspired by the colors in
+and layout. After user review, its dark surfaces were lifted about 2% toward white;
+Fahrenheit received the same small lift without changing its accent or text colors.
+The original palette is inspired by the colors in
 [Anthropic's published brand guidelines](https://github.com/anthropics/skills/blob/main/skills/brand-guidelines/SKILL.md);
 it is an optional Muxal theme, not an official Anthropic product.
 
-Both additions use the existing theme loader and ambient tint controls. The
-collection now has 21 public choices. Palette checks cover body text, secondary
+Clay Dark uses the existing theme loader and ambient tint controls. The
+collection now has 20 public choices. Palette checks cover body text, secondary
 labels, primary buttons, and syntax contrast; native review should assess chrome,
 active/inactive tabs, selection, terminal ANSI colors, editor highlighting, and
 Spider status/glow visibility.

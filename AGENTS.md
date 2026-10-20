@@ -105,10 +105,9 @@ track the desktop code. See `ios/README.md`.
   - Drag must never also open: rows open on `.on_click`, not `.on_mouse_down`
     (gpui cancels the click once the drag threshold passes — verified in gpui's
     `elements/div.rs`).
-- **Native webview overlay rule** — browser panes (`browser.rs`) are native child
-  windows that draw ABOVE all gpui content. `MuxalApp::any_overlay_open` must list
-  **every** modal/palette/menu/drag flag; when you add a new overlay, add its flag
-  there or the webview will float over it.
+- **Overlay focus** — all panes now use GPUI; the native web browser has been
+  removed. Keep `MuxalApp::any_overlay_open` current for focus diagnostics and
+  continue recording/restoring focus for input-holding popups.
 
 ## Building & testing a feature
 
@@ -276,30 +275,36 @@ As of **v0.5.4** (tag `d1a01a4`, published and promoted):
   never restart or kill it yourself. Spider, including Phase 2, is ready
   for user review on `dev/spider-map`. Promotion has not been approved.
 - **Theme review (dev):** all 19 existing choices reviewed in
-  `docs/theme-review.md`. Added optional **Workbench Dark** (classic editor
-  graphite/blue/jade/orange) and **Clay Dark** (Claude-inspired warm charcoal,
-  ivory, terracotta); the public collection now has 21 themes. Default Dark
-  remains the default. Both use the existing loader/tint pipeline. Contrast
-  checks, full gates (608 Rust tests), extract-only i18n, isolated-HOME smoke,
-  and native theme/settings/terminal/Spider checks passed. Fresh review windows
-  are **Muxal — Clay Dark review** and **Muxal — Workbench Dark review**.
-  Human visual acceptance and promotion remain pending.
-- **Upcoming work — fully remove the built-in web browser (decided 2026-10-18):**
-  the user has decided to retire it entirely. It does not fit the intended
-  workflow, adds clutter and confusion, and can accidentally route users into a
-  browser they did not choose. Users should bring their own browser and search
-  engine; deliberate URL-opening actions should use the system default browser.
-  This is a recorded product decision and upcoming cleanup, not implemented yet.
-  Remove browser panes/presets, settings, commands, embedded-page controls,
-  internal URL routing and preview entry points, native webview backends/helper
-  processes, and browser-only assets/dependencies. Provide backwards-compatible
-  migration for saved browser panes, presets, and settings so existing workspaces
-  still load without losing unrelated work. Audit packaging/CI dependencies,
-  licensing notices, and documentation, including the hand-maintained `.deb`
-  dependency list. The filesystem **file browser** remains; this decision concerns
-  web browsing. Preserve `ios/` as its historical snapshot. Do not expand or
-  re-propose the built-in web browser; use the normal dev gates and user approval
-  before promoting its eventual removal.
+  `docs/theme-review.md`. Added optional **Clay Dark** (Claude-inspired warm
+  charcoal, ivory, terracotta); the public collection now has 20 themes. Default
+  Dark remains the default. Clay Dark and Fahrenheit received the user-requested
+  subtle lift of dark surfaces (about 2% toward white), with accents/text intact.
+  The user declined Workbench Dark as too similar to existing choices; it is
+  removed. Clay uses the existing loader/tint pipeline. The user liked Clay
+  before the final small brightness lift; final brightness review remains.
+  Existing review windows use older binaries until the user restarts dev. Basic
+  visual reviews are user-led; do not automate desktop interactions for them.
+  Promotion remains unapproved.
+- **Built-in web browser removal (dev):** implemented and locally verified.
+  Formatting, strict Clippy, all 597 active Rust tests (one manual benchmark
+  ignored), debug/release builds, extract-only i18n (644 keys), and the isolated
+  HOME launch smoke passed. Browser panes/presets,
+  settings/type/homepage controls, HTML preview, native webviews/helper process,
+  browser-specific focus telemetry, and browser-only dependencies/assets are
+  removed. Deliberate web-link actions use the OS handler; local files, including
+  HTML source, use the editor. The filesystem file browser stays. Pure
+  compatibility decoders in `muxal-core::compat` retire saved browser data while
+  preserving other panes, tab groups, split weights, and settings; loops bound
+  to retired presets are disabled for review. The native dependency audit
+  (`ldd`, `readelf`, `dpkg-shlibdeps`) confirms no GTK/GLib/WebKit/JavaScriptCore/
+  libsoup runtime requirement. The .deb list and CI build dependencies are
+  updated; AppImage packaging no longer needs the browser exclusion closure.
+  A local .deb builds with the expected five runtime dependencies. The local
+  host requires glibc 2.39; published packages keep CI's Ubuntu 22.04 baseline
+  (2.35). Native CI packages will be checked as part of the release ritual.
+  Never restore the embedded browser
+  or change `ios/`, which remains its historical snapshot. User dev review and
+  explicit promotion approval are still required.
 - **Passed on / parked — do not re-propose without being asked:** the tmux
   survival layer (tmux isn't even installed on this machine; the user isn't
   interested), layout presets, cursor-flicker work, startup-delay audit, and
@@ -330,8 +335,8 @@ As of **v0.5.4** (tag `d1a01a4`, published and promoted):
   gradually. Spider must be opt-in in Settings and **disabled by default**;
   disabling stops its background work and preserves existing tabs as placeholders.
   The initial live sandbox render received positive preliminary feedback. The
-  full gate passes (608 Rust tests, plus the manual observer benchmark),
-  extract-only i18n is current (659 English keys), and the
+  full gate passes (597 Rust tests, plus the manual observer benchmark),
+  extract-only i18n is current (644 English keys), and the
   isolated-HOME launch smoke passed. A restored disabled tab launched no scans;
   the enabled native map scanned this repository in about 0.3 seconds. The
   100,000-file pure-model fixture completed in about 0.8 seconds with 53 MiB peak

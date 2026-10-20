@@ -10,16 +10,6 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-/// What a preset opens: a terminal agent or a web-browser pane.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum PresetKind {
-    /// A terminal running an agent/shell (`program`, `args`, … apply).
-    #[default]
-    Terminal,
-    /// A web-browser pane that opens `url` (the terminal fields are unused).
-    Browser,
-}
-
 /// How an instance's system prompt is delivered to the agent.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case")]
@@ -102,12 +92,6 @@ pub struct AgentPreset {
     /// Claude's `--resume`, Codex's `resume`). Required for resume support.
     #[serde(default)]
     pub resume_flag: Option<String>,
-    /// Whether this preset opens a terminal agent or a browser pane.
-    #[serde(default)]
-    pub kind: PresetKind,
-    /// Homepage for a `Browser`-kind preset (ignored for terminals).
-    #[serde(default)]
-    pub url: String,
 }
 
 impl AgentPreset {
@@ -117,8 +101,6 @@ impl AgentPreset {
     pub fn shell() -> Self {
         Self {
             id: Uuid::new_v4(),
-            kind: PresetKind::Terminal,
-            url: String::new(),
             name: if cfg!(windows) { "PowerShell" } else { "Shell" }.to_string(),
             program: None,
             model: None,
@@ -143,8 +125,6 @@ impl AgentPreset {
     pub fn cmd() -> Self {
         Self {
             id: Uuid::new_v4(),
-            kind: PresetKind::Terminal,
-            url: String::new(),
             name: "Cmd".to_string(),
             program: Some("cmd.exe".to_string()),
             model: None,
@@ -175,8 +155,6 @@ impl AgentPreset {
     pub fn git_bash() -> Self {
         Self {
             id: Uuid::new_v4(),
-            kind: PresetKind::Terminal,
-            url: String::new(),
             name: "Git Bash".to_string(),
             program: Some(git_bash_program()),
             model: None,
@@ -201,8 +179,6 @@ impl AgentPreset {
     pub fn claude() -> Self {
         Self {
             id: Uuid::new_v4(),
-            kind: PresetKind::Terminal,
-            url: String::new(),
             name: "Claude".to_string(),
             program: Some("claude".to_string()),
             model: None,
@@ -230,8 +206,6 @@ impl AgentPreset {
     pub fn opencode() -> Self {
         Self {
             id: Uuid::new_v4(),
-            kind: PresetKind::Terminal,
-            url: String::new(),
             name: "opencode".to_string(),
             program: Some("opencode".to_string()),
             model: None,
@@ -255,8 +229,6 @@ impl AgentPreset {
     pub fn hermes() -> Self {
         Self {
             id: Uuid::new_v4(),
-            kind: PresetKind::Terminal,
-            url: String::new(),
             name: "Hermes".to_string(),
             program: Some("hermes".to_string()),
             model: None,
@@ -278,8 +250,6 @@ impl AgentPreset {
     pub fn ollama() -> Self {
         Self {
             id: Uuid::new_v4(),
-            kind: PresetKind::Terminal,
-            url: String::new(),
             name: "Ollama".to_string(),
             program: Some("ollama".to_string()),
             model: None,
@@ -308,8 +278,6 @@ impl AgentPreset {
     pub fn ollama_code() -> Self {
         Self {
             id: Uuid::new_v4(),
-            kind: PresetKind::Terminal,
-            url: String::new(),
             name: "Ollama Code".to_string(),
             program: Some("ollama".to_string()),
             model: None,
@@ -338,8 +306,6 @@ impl AgentPreset {
     pub fn pi() -> Self {
         Self {
             id: Uuid::new_v4(),
-            kind: PresetKind::Terminal,
-            url: String::new(),
             name: "Pi".to_string(),
             program: Some("pi".to_string()),
             model: None,
@@ -365,8 +331,6 @@ impl AgentPreset {
     pub fn amp() -> Self {
         Self {
             id: Uuid::new_v4(),
-            kind: PresetKind::Terminal,
-            url: String::new(),
             name: "Amp".to_string(),
             program: Some("amp".to_string()),
             model: None,
@@ -392,8 +356,6 @@ impl AgentPreset {
     pub fn grok() -> Self {
         Self {
             id: Uuid::new_v4(),
-            kind: PresetKind::Terminal,
-            url: String::new(),
             name: "Grok".to_string(),
             program: Some("grok".to_string()),
             model: None,
@@ -420,8 +382,6 @@ impl AgentPreset {
     pub fn codex() -> Self {
         Self {
             id: Uuid::new_v4(),
-            kind: PresetKind::Terminal,
-            url: String::new(),
             name: "Codex".to_string(),
             program: Some("codex".to_string()),
             model: None,
@@ -438,31 +398,6 @@ impl AgentPreset {
             // Agent-owned id: leave session_id_flag unset; resume is a subcommand.
             session_id_flag: None,
             resume_flag: Some("resume".to_string()),
-        }
-    }
-
-    /// A built-in web-browser preset. Picked like an agent; opens a browser pane
-    /// (embedded on macOS/Windows, a separate window on Linux) at `url`.
-    pub fn browser() -> Self {
-        Self {
-            id: Uuid::new_v4(),
-            kind: PresetKind::Browser,
-            url: "https://duckduckgo.com".to_string(),
-            name: "Browser".to_string(),
-            program: None,
-            model: None,
-            model_flag: None,
-            effort: None,
-            effort_flag: None,
-            args: Vec::new(),
-            system_prompt: None,
-            injection: InjectionMode::None,
-            env: Vec::new(),
-            working_markers: Vec::new(),
-            blocked_markers: Vec::new(),
-            startup_delay_ms: 0,
-            session_id_flag: None,
-            resume_flag: None,
         }
     }
 
@@ -484,7 +419,6 @@ impl AgentPreset {
             Self::ollama(),
             Self::ollama_code(),
             Self::pi(),
-            Self::browser(),
         ]);
         presets
     }

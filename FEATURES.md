@@ -78,12 +78,11 @@ feature is added or changed, update the matching entry here in the same change**
 ## Pop-out windows
 
 - **Detach a pane** — pop a pane out into its own OS window without terminating it.
-  Terminals and editors move across; a browser pane is re-created in the new window
-  at the same URL (a native webview belongs to the window that built it).
+  Terminals, editors, diffs, and Spider panes retain their state across windows.
 - **Re-dock in place** — a popped-out pane remembers where it came from; the Dock
   button returns it to its original location.
 - **Close terminates** — closing a pop-out window kills its terminal (with a
-  confirmation). Editors and browser panes just close.
+  confirmation). Editors, diffs, and Spider panes just close.
 
 ## Agents
 
@@ -93,10 +92,8 @@ feature is added or changed, update the matching entry here in the same change**
   current selection follows its preset while dragging.
 
 - **Built-in agent presets** — Shell, Claude, opencode, Amp (ampcode), Grok
-  (x.ai), Hermes, Ollama, **Ollama Code**, Pi, and a **Browser** preset, each with
-  its own icon. A preset is either a terminal agent or a **Browser** (opens a
-  browser pane at its homepage) — switch the type and edit the fields in
-  Settings → Agents.
+  (x.ai), Codex, Hermes, Ollama, **Ollama Code**, and Pi, each with its own icon.
+  All presets launch terminals/agents; edit their fields in Settings → Agents.
 - **Ollama Code** — runs a coding agent backed by an Ollama model via
   `ollama launch <agent> --model <model>` (seeded as `ollama launch opencode
   --model glm-5.2:cloud`); change the agent or model in the preset's args.
@@ -409,30 +406,16 @@ feature is added or changed, update the matching entry here in the same change**
   loop…" to create one. Schedules survive restarts (a daily-at whose time passed
   while closed fires once on next launch). Loops fire only while muxal is running.
 
-## Built-in browser
+## Web links
 
-- **System webview, not bundled Chromium** — preview links agents print (or a
-  locally hosted dev site) without leaving muxal. Uses the OS engine (WKWebView on
-  macOS, WebKitGTK on Linux), so it's light on disk and memory.
-- **macOS: an embedded pane** — ctrl+click a URL and it opens as a browser pane
-  beside the terminal, with an address bar and Back / Forward / Reload buttons;
-  Reload refreshes the page you are actually on (several links deep, if that's where
-  you are), not the pane's original URL. The URL persists and restores with the
-  workspace. Clicking into the page makes it the active pane — so paste and the
-  toolbar act on the browser, not on whichever pane you were in before — and hands
-  it the keyboard; muxal's own shortcuts keep working until you click into a page.
-  The toolbar can open the current page in the system browser. Native page context menus remain usable.
-- **Linux: a separate browser window** — gpui can't embed WebKitGTK, so links open
-  in a muxal-managed browser window (a crash-isolated `muxal --browser` process);
-  if WebKit isn't installed it falls back to the system browser with a note.
-- **Browser as a preset** — the built-in **Browser** preset opens a web-browser
-  pane; pick it anywhere you pick an agent (the toolbar's new-pane dropdown, or
-  hold a pane's split / `+` button and choose it). Configure its homepage — and
-  add more browser presets with their own homepages — in **Settings → Agents**
-  (default `duckduckgo.com`; a bare domain gets `https://`). On macOS it's an
-  embedded pane in the layout; on Linux it opens in a separate browser window.
-- **Optional** — Settings → Behavior → "Open ctrl+clicked links in the built-in
-  browser" (default on); off routes every link to the system browser.
+- **Bring your own browser** — deliberate web-link actions open the system default
+  browser. Muxal has no built-in web browser, browser presets, homepage/search
+  setting, or HTML preview pane. Local files, including HTML source, open in the
+  editor; the filesystem file browser remains available.
+- **Saved workspace migration** — retired browser tabs and presets are removed
+  when old data loads. Other panes, tab groups, split weights, and settings remain
+  intact; loading a workspace never launches old URLs. Scheduled loops tied to a
+  removed browser preset are disabled for review instead of changing agents.
 
 ## Notifications
 
@@ -496,14 +479,14 @@ feature is added or changed, update the matching entry here in the same change**
   `http(s)` URL, an OSC 8 hyperlink (e.g. `ls --hyperlink` or agent markdown
   links), a literal Markdown inline link, a `file://` URI, or a **file path**
   (absolute, `~/`, or relative to the pane's working directory).
-  Local files open in a muxal editor pane; only paths that exist are
+  Web URLs open in the system default browser. Local files open in a muxal editor
+  pane; only paths that exist are
   clickable, and a trailing `:line:col` is understood. `Ctrl`/`Cmd`+hover
   underlines the link and shows a pointing-hand cursor (Ctrl/Cmd down re-hit-tests
   without requiring a mouse move).
-- **Links in new tabs** — middle-clicking a terminal link opens it without stealing
-  terminal focus; browser target=_blank, window.open, Ctrl+click, and middle-click
-  requests stay in the source project and open as Muxal tabs. Right-clicking a
-  terminal link opens link actions instead of copying or pasting through the PTY.
+- **Background link opening** — middle-clicking a terminal link restores its
+  terminal focus after opening the link. Right-clicking a terminal link opens
+  link actions instead of copying or pasting through the PTY.
 - **Focus reporting** — forwards focus in/out to the PTY (DECSET 1004) so agents
   know when their pane is active.
 - **Focus after closing** — closing the last tab returns keyboard focus to muxal,
@@ -579,14 +562,14 @@ feature is added or changed, update the matching entry here in the same change**
   from a focused terminal.
 - **Resource reuse** — opening a local file that already has an editor tab focuses
   that tab and reloads it from disk when its buffer is clean; dirty buffers are
-  never overwritten. File links can jump to `#L12C4`, and local HTML links open in
-  the browser preview while HTML source panes offer a **Preview** action.
+  never overwritten. File links can jump to `#L12C4`; HTML opens as source in
+  the editor, using the same file reuse behavior.
 - **External file freshness** — open local text files, including rendered Markdown,
   update within 500 ms when another tool writes them. Refresh keeps cursor and scroll
   position. Dirty buffers show **Reload / Keep mine** instead of being overwritten;
   deleted or unreadable files remain open with a warning. The same behavior works in
   main, secondary, and popped-out editor windows.
-- **Resource tab grouping** — files, diffs, and browser pages opened by default join
+- **Resource tab grouping** — files and diffs opened by default join
   the nearest pane of the same type; explicit New Tab and New Pane commands still
   use the requested tab or split placement. Opening another resource as a tab
   preserves the surrounding split geometry, including narrow resource columns.
@@ -699,24 +682,22 @@ feature is added or changed, update the matching entry here in the same change**
 
 - **Settings modal** — sections for Appearance, Editor, Behavior, Agents,
   Runners, Snippets, Loops, Projects, and Keybindings.
-- **Themes** — 21 curated choices: Default Light/Dark, Gruvbox Light/Dark,
+- **Themes** — 20 curated choices: Default Light/Dark, Gruvbox Light/Dark,
   Ayu Light/Dark, Catppuccin Latte/Frappe, Alduin, Everforest Dark,
   Fahrenheit, Molokai Dark, Spaceduck, Tokyo Dark, Twilight Grey, Liquid
-  Spaceglass, Porcelain, Ember Observatory, Mainframe, Workbench Dark, and Clay Dark. Fahrenheit adds red accents;
+  Spaceglass, Porcelain, Ember Observatory, Mainframe, and Clay Dark. Fahrenheit adds red accents;
   Spaceduck pairs plum surfaces with golden focus accents, orchid, and turquoise;
   Tokyo Dark adds electric blue, ice-cyan active tabs, and sakura-pink syntax on
   deep indigo. Tokyo consolidates the former Night/Storm/Moon variants (saved
   selections migrate automatically). Adventure is removed; saved Adventure
-  selections fall back to Default Dark.
+  selections fall back to Default Dark. Fahrenheit’s near-black surfaces and
+  Clay Dark’s charcoal surfaces have a subtle brightness lift; their accent
+  colors and text remain unchanged.
 - **Default Dark** — the default for fresh installs and environments uses
   balanced charcoal surfaces, layered panels/tabs/menus, soft light text, and
   pale-blue focus accents. Terminal ANSI and editor syntax colors remain distinct
   and readable. Existing Default Dark selections receive the refreshed palette;
   saved choices of other themes keep their selection.
-- **Workbench Dark** — an original graphite palette with familiar classic-editor
-  colors: blue keywords, jade types, warm orange strings, pale-gold functions,
-  and sky-blue properties. Neutral layered chrome and distinct terminal/status
-  colors keep it usable beside agents; Default Dark remains the default.
 - **Clay Dark** — Claude-inspired warm charcoal, ivory text, and terracotta-orange
   focus accents, with restrained sage, blue, and sand syntax and terminal colors.
   An optional dark theme; it keeps the normal interface fonts and layout.
@@ -808,9 +789,8 @@ feature is added or changed, update the matching entry here in the same change**
   swapping atomically with the previous binary kept as `muxal.bak`.
 
 - **Opt-in focus diagnostics** — the UI profiler correlates GPUI focus-path
-  loss with redraw requests and native window ownership. WebView children
-  must descend from a registered Muxal window; unrelated WRY apps remain
-  external. Records use fixed class buckets and opaque pane/project UUIDs,
+  loss with redraw requests and native window ownership. Records use fixed
+  class buckets and opaque pane/project UUIDs,
   with no terminal text, URLs, titles, or paths.
 - **Cross-platform** — Linux (x86_64 + arm64) and macOS (Intel + Apple Silicon).
 - **Desktop integration** — app icon and a `.desktop` launcher entry (also the

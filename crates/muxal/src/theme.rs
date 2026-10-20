@@ -341,7 +341,6 @@ mod tests {
             "Spaceduck",
             "Tokyo Dark",
             "Twilight Grey",
-            "Workbench Dark",
             "Clay Dark",
         ]
         .into_iter()

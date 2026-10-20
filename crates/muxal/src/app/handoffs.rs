@@ -209,11 +209,7 @@ impl MuxalApp {
             return;
         };
         let default = self.handoff_source(&request).and_then(|i| i.preset_id);
-        let eligible = |p: &&AgentPreset| {
-            p.kind == muxal_core::PresetKind::Terminal
-                && p.program.is_some()
-                && self.agent_runnable(p)
-        };
+        let eligible = |p: &&AgentPreset| p.program.is_some() && self.agent_runnable(p);
         let recipient = self
             .presets
             .iter()
@@ -607,11 +603,11 @@ impl MuxalApp {
                     .child(Self::wide_input(Input::new(&self.handoff_ui.input).h(px(260.0))))
                     .child(div().text_sm().child(t("Receiving agent")));
                 let mut agents = div().flex().flex_wrap().gap_1();
-                for preset in self.presets.iter().filter(|p| {
-                    p.kind == muxal_core::PresetKind::Terminal
-                        && p.program.is_some()
-                        && self.agent_runnable(p)
-                }) {
+                for preset in self
+                    .presets
+                    .iter()
+                    .filter(|p| p.program.is_some() && self.agent_runnable(p))
+                {
                     let id = preset.id;
                     agents = agents.child(
                         Button::new(SharedString::from(format!("handoff-agent-{id}")))

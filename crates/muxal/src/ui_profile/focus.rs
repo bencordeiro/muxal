@@ -40,12 +40,6 @@ pub enum FocusActionReason {
     RestoreInstance,
     AppRootChrome,
     PanePointer,
-    #[cfg(target_os = "windows")]
-    NativeBrowserGain,
-    #[cfg(target_os = "windows")]
-    NativeBrowserLoss,
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
-    NativeBrowserAccepted,
     WindowActivated,
     WindowDeactivated,
 }
@@ -57,12 +51,6 @@ impl FocusActionReason {
             Self::RestoreInstance => "restore-instance",
             Self::AppRootChrome => "app-root-chrome",
             Self::PanePointer => "pane-pointer",
-            #[cfg(target_os = "windows")]
-            Self::NativeBrowserGain => "native-browser-gain",
-            #[cfg(target_os = "windows")]
-            Self::NativeBrowserLoss => "native-browser-loss",
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            Self::NativeBrowserAccepted => "native-browser-accepted",
             Self::WindowActivated => "window-activated",
             Self::WindowDeactivated => "window-deactivated",
         }
@@ -205,51 +193,6 @@ impl FocusRegistry {
         }
     }
 
-    #[cfg(any(test, target_os = "macos", target_os = "windows"))]
-    fn record_pane_action(&mut self, pane: Uuid, reason: FocusActionReason, at: Instant) {
-        let generation = self.next_generation();
-        let action = FocusAction {
-            reason,
-            pane: Some(pane),
-            at,
-            generation,
-        };
-        let window_id = self
-            .panes
-            .iter()
-            .find(|state| state.pane == pane)
-            .and_then(|state| state.window_id);
-        if let Some(state) = self.panes.iter_mut().find(|state| state.pane == pane) {
-            state.last_action = Some(action);
-            state.touched = generation;
-        } else {
-            if self.panes.len() >= MAX_PANES
-                && let Some((index, _)) = self
-                    .panes
-                    .iter()
-                    .enumerate()
-                    .min_by_key(|(_, pane)| pane.touched)
-            {
-                self.panes.remove(index);
-            }
-            self.panes.push(PaneState {
-                pane,
-                window_id: None,
-                last_action: Some(action),
-                touched: generation,
-            });
-        }
-        if let Some(window_id) = window_id
-            && let Some(window) = self
-                .windows
-                .iter_mut()
-                .find(|window| window.id == window_id)
-        {
-            window.last_action = Some(action);
-            window.touched = generation;
-        }
-    }
-
     fn context(&self, window_id: u64, pane: Uuid, now: Instant) -> FocusContext {
         let window = self.windows.iter().find(|window| window.id == window_id);
         let pane_action = self
@@ -301,7 +244,6 @@ struct FocusActionSnapshot {
 #[cfg(any(target_os = "windows", test))]
 enum OwnerKind {
     MuxalTopLevel,
-    MuxalNativeChild,
     MuxalOther,
     External,
 }
@@ -311,7 +253,6 @@ impl OwnerKind {
     fn label(self) -> &'static str {
         match self {
             Self::MuxalTopLevel => "muxal-top-level",
-            Self::MuxalNativeChild => "muxal-native-child",
             Self::MuxalOther => "muxal-other",
             Self::External => "external",
         }
@@ -444,17 +385,6 @@ pub fn unregister_profile_window(window_id: u64) {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-pub fn register_focus_pane(pane: Uuid, window: &Window) {
-    if !super::is_enabled() {
-        return;
-    }
-    let window_id = window.window_handle().window_id().as_u64();
-    if let Ok(mut state) = registry().lock() {
-        state.register_pane(pane, window_id);
-    }
-}
-
 pub fn unregister_focus_pane(pane: Uuid) {
     if !super::is_enabled() {
         return;
@@ -483,68 +413,6 @@ pub fn focus_action(reason: FocusActionReason, pane: Option<Uuid>, window: &Wind
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-pub fn focus_action_for_pane(reason: FocusActionReason, pane: Uuid) {
-    if !super::is_enabled() {
-        return;
-    }
-    if let Ok(mut state) = registry().lock() {
-        state.record_pane_action(pane, reason, Instant::now());
-    }
-}
-
-/// Record a native child focus edge that GPUI cannot observe. Unlike a plain
-/// action marker, this immediately samples Win32 ownership and emits a bounded
-/// deferred record, so WebView focus theft does not depend on a later terminal
-/// edge to become visible in the trace.
-#[cfg(target_os = "windows")]
-pub fn native_focus_edge_for_pane(reason: FocusActionReason, pane: Uuid, focused: bool) {
-    if !super::is_enabled() {
-        return;
-    }
-    super::ensure_flusher();
-    let now = Instant::now();
-    let at = SystemTime::now();
-    let (window_id, context) = if let Ok(mut state) = registry().lock() {
-        state.record_pane_action(pane, reason, now);
-        let window_id = state
-            .panes
-            .iter()
-            .find(|state| state.pane == pane)
-            .and_then(|state| state.window_id)
-            .unwrap_or(0);
-        (window_id, state.context(window_id, pane, now))
-    } else {
-        (
-            0,
-            FocusContext {
-                kind: ProfileWindowKind::Unknown,
-                host_hwnd: None,
-                action: None,
-                top_level_hwnds: Vec::new(),
-            },
-        )
-    };
-    let native = sample_native_focus(&context.top_level_hwnds);
-    let window_active = matches!(
-        (&native.foreground, context.host_hwnd),
-        (OwnerSnapshot::Present { hwnd, .. }, Some(host)) if *hwnd == host
-    );
-    super::defer_record(super::DeferredRecord::Focus {
-        at,
-        event: Box::new(FocusEvent {
-            pane,
-            focused,
-            window_active,
-            window_kind: context.kind,
-            window_id,
-            host_hwnd: context.host_hwnd,
-            action: context.action,
-            native,
-        }),
-    });
-}
-
 pub fn window_activation(kind: ProfileWindowKind, active: bool, window: &Window) {
     if !super::is_enabled() {
         return;
@@ -567,14 +435,11 @@ fn classify_owner(
     pid: u32,
     current_pid: u32,
     known_top_level: bool,
-    known_native_child: bool,
 ) -> Option<OwnerKind> {
     if !hwnd_present {
         None
     } else if known_top_level {
         Some(OwnerKind::MuxalTopLevel)
-    } else if known_native_child {
-        Some(OwnerKind::MuxalNativeChild)
     } else if pid == current_pid {
         Some(OwnerKind::MuxalOther)
     } else {
@@ -582,40 +447,11 @@ fn classify_owner(
     }
 }
 
-#[cfg(any(target_os = "windows", test))]
-fn native_child_in_ancestry(
-    hwnd: isize,
-    top_level_hwnds: &[isize],
-    mut inspect: impl FnMut(isize) -> Option<(isize, bool)>,
-) -> bool {
-    // Chromium may own the focused child in another process. Its PID alone
-    // cannot establish ownership: require both a WRY host and a registered
-    // Muxal ancestor. A broken/cyclic/overlong chain remains unclassified.
-    let mut current = hwnd;
-    let mut saw_wry_host = false;
-    for _ in 0..16 {
-        if current == 0 {
-            return false;
-        }
-        if top_level_hwnds.contains(&current) {
-            return saw_wry_host;
-        }
-        let Some((parent, is_wry)) = inspect(current) else {
-            return false;
-        };
-        saw_wry_host |= is_wry;
-        current = parent;
-    }
-    false
-}
-
 /// Window classes are arbitrary external text. Keep only exact known classes,
 /// never a sanitized copy or a prefix that could carry user content.
 #[cfg(any(target_os = "windows", test))]
 pub(super) fn class_name_bucket(class: &str) -> &'static str {
-    if class.eq_ignore_ascii_case("WRY_WEBVIEW") {
-        "wry-webview"
-    } else if class == "Chrome_WidgetWin_0" || class == "Chrome_WidgetWin_1" {
+    if class == "Chrome_WidgetWin_0" || class == "Chrome_WidgetWin_1" {
         "chrome-widget"
     } else if class == "Chrome_RenderWidgetHostHWND" {
         "chrome-render-widget"
@@ -699,7 +535,7 @@ pub(super) fn focus_line(event: &FocusEvent) -> String {
 
 #[cfg(target_os = "windows")]
 fn platform_window_hwnd(window: &Window) -> Option<isize> {
-    use wry::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     let handle = HasWindowHandle::window_handle(window).ok()?;
     let RawWindowHandle::Win32(handle) = handle.as_raw() else {
         return None;
@@ -721,7 +557,7 @@ fn sample_native_focus(top_level_hwnds: &[isize]) -> NativeFocusSnapshot {
     use windows::Win32::Foundation::HWND;
     use windows::Win32::System::Threading::GetCurrentProcessId;
     use windows::Win32::UI::WindowsAndMessaging::{
-        GUITHREADINFO, GetClassNameW, GetForegroundWindow, GetGUIThreadInfo, GetParent,
+        GUITHREADINFO, GetClassNameW, GetForegroundWindow, GetGUIThreadInfo,
         GetWindowThreadProcessId,
     };
 
@@ -731,17 +567,6 @@ fn sample_native_focus(top_level_hwnds: &[isize]) -> NativeFocusSnapshot {
         class_name_bucket(&String::from_utf16_lossy(&buffer[..len.min(buffer.len())]))
     }
 
-    fn native_child(hwnd: HWND, top_level_hwnds: &[isize]) -> bool {
-        native_child_in_ancestry(hwnd.0, top_level_hwnds, |current| {
-            let hwnd = HWND(current);
-            let class = class_name(hwnd);
-            if class == "unavailable" {
-                return None;
-            }
-            Some((unsafe { GetParent(hwnd) }.0, class == "wry-webview"))
-        })
-    }
-
     fn owner(hwnd: HWND, current_pid: u32, top_level_hwnds: &[isize]) -> OwnerSnapshot {
         if hwnd.0 == 0 {
             return OwnerSnapshot::Absent;
@@ -749,9 +574,8 @@ fn sample_native_focus(top_level_hwnds: &[isize]) -> NativeFocusSnapshot {
         let mut pid = 0;
         let tid = unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
         let known_top_level = top_level_hwnds.contains(&hwnd.0);
-        let known_native_child = native_child(hwnd, top_level_hwnds);
-        let kind = classify_owner(true, pid, current_pid, known_top_level, known_native_child)
-            .unwrap_or(OwnerKind::External);
+        let kind =
+            classify_owner(true, pid, current_pid, known_top_level).unwrap_or(OwnerKind::External);
         OwnerSnapshot::Present {
             hwnd: hwnd.0,
             pid,
@@ -812,58 +636,6 @@ fn sample_native_focus(_top_level_hwnds: &[isize]) -> NativeFocusSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn foreign_wry_window_is_not_a_muxal_child() {
-        let native = native_child_in_ancestry(30, &[10], |hwnd| match hwnd {
-            30 => Some((20, false)),
-            20 => Some((0, true)),
-            _ => None,
-        });
-        assert_eq!(
-            classify_owner(true, 70, 7, false, native),
-            Some(OwnerKind::External),
-        );
-    }
-
-    #[test]
-    fn browser_subprocess_below_registered_wry_host_is_a_muxal_child() {
-        let native = native_child_in_ancestry(30, &[10], |hwnd| match hwnd {
-            30 => Some((20, false)),
-            20 => Some((10, true)),
-            _ => None,
-        });
-        assert_eq!(
-            classify_owner(true, 70, 7, false, native),
-            Some(OwnerKind::MuxalNativeChild),
-        );
-    }
-
-    #[test]
-    fn same_process_popup_without_wry_ancestry_is_other() {
-        let native = native_child_in_ancestry(20, &[10], |hwnd| match hwnd {
-            20 => Some((10, false)),
-            _ => None,
-        });
-        assert_eq!(
-            classify_owner(true, 7, 7, false, native),
-            Some(OwnerKind::MuxalOther),
-        );
-    }
-
-    #[test]
-    fn native_ancestry_is_bounded_and_requires_an_available_registered_ancestor() {
-        let mut calls = 0;
-        assert!(!native_child_in_ancestry(1, &[100], |hwnd| {
-            calls += 1;
-            Some((hwnd + 1, hwnd == 1))
-        }));
-        assert_eq!(calls, 16);
-        assert!(!native_child_in_ancestry(1, &[10], |_| None));
-        assert!(!native_child_in_ancestry(1, &[10], |_| Some((1, true))));
-        assert!(!native_child_in_ancestry(0, &[10], |_| panic!(
-            "absent HWND"
-        )));
-    }
 
     #[test]
     fn external_class_text_is_replaced_by_a_fixed_bucket() {
@@ -871,12 +643,9 @@ mod tests {
             "https://example.invalid/private-session",
             "D:/private/report.txt",
             "User supplied window title",
-            "WRY_WEBVIEW.private-token",
         ] {
             assert_eq!(class_name_bucket(class), "other");
         }
-        assert_eq!(class_name_bucket("WRY_WEBVIEW"), "wry-webview");
-        assert_eq!(class_name_bucket("wry_webview"), "wry-webview");
         assert_eq!(class_name_bucket("Chrome_WidgetWin_1"), "chrome-widget");
         assert_eq!(
             class_name_bucket("Chrome_RenderWidgetHostHWND"),
@@ -887,22 +656,18 @@ mod tests {
     }
 
     #[test]
-    fn ownership_classifies_absent_top_native_same_process_and_external() {
-        assert_eq!(classify_owner(false, 0, 7, false, false), None);
+    fn ownership_classifies_absent_top_same_process_and_external() {
+        assert_eq!(classify_owner(false, 0, 7, false), None);
         assert_eq!(
-            classify_owner(true, 7, 7, true, false),
+            classify_owner(true, 7, 7, true),
             Some(OwnerKind::MuxalTopLevel)
         );
         assert_eq!(
-            classify_owner(true, 70, 7, false, true),
-            Some(OwnerKind::MuxalNativeChild)
-        );
-        assert_eq!(
-            classify_owner(true, 7, 7, false, false),
+            classify_owner(true, 7, 7, false),
             Some(OwnerKind::MuxalOther)
         );
         assert_eq!(
-            classify_owner(true, 70, 7, false, false),
+            classify_owner(true, 70, 7, false),
             Some(OwnerKind::External)
         );
     }
@@ -929,7 +694,7 @@ mod tests {
                     tid: 6,
                     class: class_name_bucket("Chrome Widget / title"),
                     this_process: false,
-                    kind: OwnerKind::MuxalNativeChild,
+                    kind: OwnerKind::External,
                 },
                 active: OwnerSnapshot::Absent,
                 focus: OwnerSnapshot::Unavailable,
@@ -941,7 +706,7 @@ mod tests {
         };
         assert_eq!(
             focus_line(&event),
-            "ui-prof[focus v2] pane=00000000-0000-0000-0000-000000000000 focused=false window_active=true window_kind=main window_id=9 host_hwnd=0x12 action=pane-pointer action_pane=ffffffff-ffff-ffff-ffff-ffffffffffff action_age=44µs action_gen=3 foreground=0x34/5/6/other/muxal-native-child/other active=none focus=unavailable capture=none menu_owner=none move_size=none caret=none"
+            "ui-prof[focus v2] pane=00000000-0000-0000-0000-000000000000 focused=false window_active=true window_kind=main window_id=9 host_hwnd=0x12 action=pane-pointer action_pane=ffffffff-ffff-ffff-ffff-ffffffffffff action_age=44µs action_gen=3 foreground=0x34/5/6/other/external/other active=none focus=unavailable capture=none menu_owner=none move_size=none caret=none"
         );
         let line = focus_line(&event);
         for forbidden in ["path=", "url=", "title=", "command=", "clipboard=", "row="] {
@@ -962,7 +727,7 @@ mod tests {
             Some(pane),
             now - Duration::from_millis(5),
         );
-        registry.record_pane_action(pane, FocusActionReason::PanePointer, now);
+        registry.record_window_action(1, FocusActionReason::PanePointer, Some(pane), now);
         let action = registry.context(1, pane, now).action.expect("last action");
         assert_eq!(action.reason, FocusActionReason::PanePointer);
         assert_eq!(action.age, Duration::ZERO);

@@ -244,8 +244,8 @@ creates no repository files, modifies no ignore rules, and makes no Git changes.
 Add Spider to the persisted pane-kind dispatch and live `PaneView` abstraction,
 including creation, restore, content rendering, focus, duplicate, close,
 detach/re-dock, and secondary windows. Audit generic/wildcard spawn paths:
-`place_and_spawn` currently falls through to terminal creation for non-browser
-kinds, and some duplication/split paths assume terminal launch. A Spider pane
+historical generic spawn paths could fall through to terminal creation for
+resource kinds, and some duplication/split paths assumed terminal launch. A Spider pane
 owns no PTY, agent session, tmux session, or startup prompt.
 
 Persist its checkout choice and visualization preferences. Keep camera,
@@ -261,8 +261,8 @@ If the selected worktree disappears, show it as unavailable and offer another
 scope rather than silently displaying different files.
 
 The existing 340-pixel pane minimum and pane-weight rules stay intact. Keep
-secondary-window routing and native browser visibility consistent with the
-existing pane tree; register new menus/popups in `any_overlay_open`. Map inputs
+secondary-window routing consistent with the existing pane tree. Keep overlay
+visibility diagnostics current in `any_overlay_open`. Map inputs
 that bind focus to a window need the same snapshot/rebuild discipline as editor
 inputs when detached or re-docked. Closing or switching a Spider tab returns
 focus to a live target. Agent-only actions/status/timers must skip it.
@@ -311,8 +311,8 @@ versioning and publication.
   the map works beside a live agent at minimum pane width and height; header
   controls overflow cleanly; layout/overlay switching preserves useful context;
   tab/split/drag/duplicate/maximize/detach/re-dock/restart all preserve the map's
-  identity and scope; editor reuse keeps unsaved buffers; browser panes cannot
-  cover map menus; focus restores in main/secondary/popped-out windows.
+  identity and scope; editor reuse keeps unsaved buffers; menus remain readable;
+  focus restores in main/secondary/popped-out windows.
 - Run the full AGENTS.md gate for implementation changes, isolated-HOME launch
   smoke, and sandboxed GUI testing. Update FEATURES.md when behavior actually
   exists and run extract-only i18n for added/changed UI strings.

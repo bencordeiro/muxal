@@ -271,13 +271,6 @@ impl EditorView {
     pub(crate) fn is_pollable_text(&self) -> bool {
         self.path.is_some() && self.diff_dir.is_none() && !self.is_image
     }
-    pub fn is_html(&self) -> bool {
-        self.path
-            .as_deref()
-            .and_then(Path::extension)
-            .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("html") || ext.eq_ignore_ascii_case("htm"))
-    }
 
     /// Whether the rendered view (vs raw editor) is currently shown.
     pub fn show_rendered(&self) -> bool {

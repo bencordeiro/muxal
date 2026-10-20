@@ -1,8 +1,8 @@
 //! Seeded fuzz over every mutating pane op, asserting the tree invariants the
 //! app renders against.
 //!
-//! Chiefly: **no leaf ever carries zero tabs**. `render_pane` and
-//! `visible_browser_ids` index `tabs[active]` for every leaf on every frame, so
+//! Chiefly: **no leaf ever carries zero tabs**. The pane renderer indexes
+//! `tabs[active]` for every leaf on every frame, so
 //! a single empty leaf would panic the whole UI. `LeafData`'s deserializer
 //! rejects `"tabs": []`, which means an empty leaf can only ever be produced by
 //! a mutation here — exactly what this fuzz rules out.

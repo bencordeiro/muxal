@@ -74,6 +74,9 @@ intentionally not packaged — support is being phased out.
 Tracked issues and their state live in
 [docs/known-issues.md](docs/known-issues.md).
 
+Web links open in your system default browser. The built-in web browser has been
+removed; the project file browser and editor remain.
+
 ## Under the hood
 
 - **GPU rendering** — the whole UI, terminal panes included, is drawn by

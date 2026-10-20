@@ -40,14 +40,10 @@ use uuid::Uuid;
 
 mod focus;
 
-#[cfg(target_os = "windows")]
-pub use focus::native_focus_edge_for_pane;
 pub use focus::{
     FocusActionReason, ProfileWindowKind, clear_focus_panes, focus_action, register_profile_window,
     terminal_focus_observer, unregister_focus_pane, unregister_profile_window, window_activation,
 };
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-pub use focus::{focus_action_for_pane, register_focus_pane};
 
 static ENABLED: OnceLock<bool> = OnceLock::new();
 static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
@@ -105,11 +101,6 @@ enum DeferredRecord {
         at: SystemTime,
         event: GpuiFocusPathEvent,
     },
-    #[cfg(target_os = "windows")]
-    BrowserVisibility {
-        at: SystemTime,
-        event: BrowserVisibilityEvent,
-    },
     LifecycleStatus {
         at: SystemTime,
         pane: Uuid,
@@ -128,61 +119,6 @@ enum DeferredRecord {
     },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[cfg(any(target_os = "windows", test))]
-pub(crate) enum BrowserVisibilityReason {
-    #[cfg(target_os = "windows")]
-    Initial,
-    Project,
-    Pane,
-    Overlay,
-}
-
-#[cfg(any(target_os = "windows", test))]
-impl BrowserVisibilityReason {
-    fn label(self) -> &'static str {
-        match self {
-            #[cfg(target_os = "windows")]
-            Self::Initial => "initial",
-            Self::Project => "project",
-            Self::Pane => "pane",
-            Self::Overlay => "overlay",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[cfg(target_os = "windows")]
-pub(crate) struct BrowserVisibilityContext {
-    pub project: Uuid,
-    pub pane: Uuid,
-    pub reason: BrowserVisibilityReason,
-    pub requested: bool,
-    pub project_active: bool,
-    pub pane_active: bool,
-    pub bounds_changed: bool,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[cfg(any(target_os = "windows", test))]
-struct BrowserVisibilityEvent {
-    project: Uuid,
-    pane: Uuid,
-    reason: BrowserVisibilityReason,
-    requested: bool,
-    project_active: bool,
-    pane_active: bool,
-    bounds_changed: bool,
-    present_generation: u64,
-    controller_visible: Option<bool>,
-    controller_hr: Option<i32>,
-    host_parent_hr: Option<i32>,
-    host_hwnd: Option<isize>,
-    host_class: Option<&'static str>,
-    host_owner: Option<&'static str>,
-    host_visible: Option<bool>,
-}
-
 /// Fixed semantic buckets for the GPUI handle retained when a rendered focus
 /// path disappears. Callers can only choose these labels; user text never
 /// enters the diagnostic.
@@ -192,8 +128,6 @@ pub(crate) enum GpuiFocusOwnerKind {
     AppRoot,
     Terminal,
     Editor,
-    Browser,
-    BrowserAddress,
     AppInput,
     Unknown,
 }
@@ -205,8 +139,6 @@ impl GpuiFocusOwnerKind {
             Self::AppRoot => "app-root",
             Self::Terminal => "terminal",
             Self::Editor => "editor",
-            Self::Browser => "browser",
-            Self::BrowserAddress => "browser-address",
             Self::AppInput => "app-input",
             Self::Unknown => "unknown",
         }
@@ -819,10 +751,6 @@ fn deferred_writer(rx: Receiver<DeferredRecord>) {
             DeferredRecord::FocusPathLost { at, event } => {
                 emit_at(at, &gpui_focus_path_line(&event))
             }
-            #[cfg(target_os = "windows")]
-            DeferredRecord::BrowserVisibility { at, event } => {
-                emit_at(at, &browser_visibility_line(&event))
-            }
             DeferredRecord::LifecycleStatus {
                 at,
                 pane,
@@ -881,23 +809,6 @@ fn phase_line(
     let elapsed = elapsed_us.map_or_else(String::new, |us| format!(" elapsed={us}µs"));
     format!(
         "ui-prof[phase {boundary}] span={id} category={category} phase={phase} pane={pane}{elapsed}"
-    )
-}
-
-#[cfg(any(target_os = "windows", test))]
-fn optional_bool(value: Option<bool>) -> &'static str {
-    match value {
-        Some(true) => "true",
-        Some(false) => "false",
-        None => "unavailable",
-    }
-}
-
-#[cfg(any(target_os = "windows", test))]
-fn optional_hresult(value: Option<i32>) -> String {
-    value.map_or_else(
-        || "unavailable".to_string(),
-        |value| format!("0x{:08x}", value as u32),
     )
 }
 
@@ -1009,32 +920,6 @@ pub(crate) fn gpui_focus_path_lost(
     });
 }
 
-#[cfg(any(target_os = "windows", test))]
-fn browser_visibility_line(event: &BrowserVisibilityEvent) -> String {
-    let host_hwnd = event.host_hwnd.map_or_else(
-        || "none".to_string(),
-        |hwnd| format!("0x{:x}", hwnd as usize),
-    );
-    format!(
-        "ui-prof[browser visibility v1] project={} pane={} reason={} requested={} project_active={} pane_active={} bounds_changed={} present_gen={} controller_visible={} controller_hr={} host_parent_hr={} host_hwnd={} host_class={} host_owner={} host_visible={}",
-        event.project,
-        event.pane,
-        event.reason.label(),
-        event.requested,
-        event.project_active,
-        event.pane_active,
-        event.bounds_changed,
-        event.present_generation,
-        optional_bool(event.controller_visible),
-        optional_hresult(event.controller_hr),
-        optional_hresult(event.host_parent_hr),
-        host_hwnd,
-        event.host_class.unwrap_or("unavailable"),
-        event.host_owner.unwrap_or("unavailable"),
-        optional_bool(event.host_visible),
-    )
-}
-
 fn agent_status_label(status: muxal_terminal::AgentStatus) -> &'static str {
     match status {
         muxal_terminal::AgentStatus::Working => "working",
@@ -1114,93 +999,6 @@ pub(crate) fn status_dirty_root_notify(generation: u64, transitions: usize) {
         reason: "status-dirty",
         generation,
         transitions,
-    });
-}
-
-/// Sample both native layers after WRY applies a Windows visibility change.
-/// WebView2's controller visibility and its containing HWND are independent;
-/// keeping both in one record distinguishes a failed hide from stale paint.
-#[cfg(target_os = "windows")]
-pub(crate) fn profile_browser_native_visibility(
-    context: BrowserVisibilityContext,
-    webview: &wry::WebView,
-) {
-    if !is_enabled() {
-        return;
-    }
-
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::System::Threading::GetCurrentProcessId;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GetClassNameW, GetWindowThreadProcessId, IsWindowVisible,
-    };
-    use windows_webview::Win32::Foundation::HWND as WebViewHwnd;
-    use wry::WebViewExtWindows as _;
-
-    ensure_flusher();
-    let controller = webview.controller();
-    let mut controller_value = windows_webview::core::BOOL::default();
-    let (controller_visible, controller_hr) =
-        match unsafe { controller.IsVisible(&mut controller_value) } {
-            Ok(()) => (Some(controller_value.as_bool()), Some(0)),
-            Err(error) => (None, Some(error.code().0)),
-        };
-
-    let mut parent = WebViewHwnd::default();
-    let (host_parent_hr, host_hwnd, host_class, host_owner, host_visible) =
-        match unsafe { controller.ParentWindow(&mut parent) } {
-            Ok(()) => {
-                let raw = parent.0 as isize;
-                if raw == 0 {
-                    (Some(0), None, None, None, None)
-                } else {
-                    let hwnd = HWND(raw);
-                    let mut buffer = [0u16; 128];
-                    let len = unsafe { GetClassNameW(hwnd, &mut buffer) }.max(0) as usize;
-                    let class = focus::class_name_bucket(&String::from_utf16_lossy(
-                        &buffer[..len.min(buffer.len())],
-                    ));
-                    let mut pid = 0;
-                    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
-                    let current_pid = unsafe { GetCurrentProcessId() };
-                    let owner = if pid == current_pid && class == "wry-webview" {
-                        "muxal-native-child"
-                    } else if pid == current_pid {
-                        "muxal-other"
-                    } else {
-                        "external"
-                    };
-                    (
-                        Some(0),
-                        Some(raw),
-                        Some(class),
-                        Some(owner),
-                        Some(unsafe { IsWindowVisible(hwnd) }.as_bool()),
-                    )
-                }
-            }
-            Err(error) => (Some(error.code().0), None, None, None, None),
-        };
-
-    defer_record(DeferredRecord::BrowserVisibility {
-        at: SystemTime::now(),
-        event: BrowserVisibilityEvent {
-            project: context.project,
-            pane: context.pane,
-            reason: context.reason,
-            requested: context.requested,
-            project_active: context.project_active,
-            pane_active: context.pane_active,
-            bounds_changed: context.bounds_changed,
-            present_generation: PUMP_GENERATION.load(Ordering::Acquire),
-            controller_visible,
-            controller_hr,
-            host_parent_hr,
-            host_hwnd,
-            host_class,
-            host_owner,
-            host_visible,
-        },
     });
 }
 
@@ -1714,35 +1512,6 @@ mod tests {
         let line = start_line(42);
         assert_eq!(line, "ui-prof[start] pid=42");
         assert!(!line.contains("path="));
-    }
-
-    #[test]
-    fn browser_visibility_record_separates_controller_and_host_state() {
-        let event = BrowserVisibilityEvent {
-            project: Uuid::max(),
-            pane: Uuid::nil(),
-            reason: BrowserVisibilityReason::Project,
-            requested: false,
-            project_active: false,
-            pane_active: true,
-            bounds_changed: false,
-            present_generation: 23,
-            controller_visible: Some(false),
-            controller_hr: Some(0),
-            host_parent_hr: Some(0),
-            host_hwnd: Some(0x12),
-            host_class: Some(focus::class_name_bucket("WRY WEBVIEW/path")),
-            host_owner: Some("muxal-native-child"),
-            host_visible: Some(true),
-        };
-        assert_eq!(
-            browser_visibility_line(&event),
-            "ui-prof[browser visibility v1] project=ffffffff-ffff-ffff-ffff-ffffffffffff pane=00000000-0000-0000-0000-000000000000 reason=project requested=false project_active=false pane_active=true bounds_changed=false present_gen=23 controller_visible=false controller_hr=0x00000000 host_parent_hr=0x00000000 host_hwnd=0x12 host_class=other host_owner=muxal-native-child host_visible=true"
-        );
-        let line = browser_visibility_line(&event);
-        for forbidden in ["url=", "title=", "path=", "command=", "row="] {
-            assert!(!line.contains(forbidden));
-        }
     }
 
     #[test]

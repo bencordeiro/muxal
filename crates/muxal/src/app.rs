@@ -58,25 +58,6 @@ const MIN_PANE_WIDTH: Pixels = px(340.0);
 /// Minimum height a vertical split's pane can shrink to (a few rows).
 const MIN_PANE_HEIGHT: Pixels = px(120.0);
 
-/// Browser tabs identify web resources by their full URL, but local files by
-/// their decoded path. A source fragment moves within the same file; it must not
-/// create another pane.
-#[cfg(any(not(target_os = "linux"), test))]
-fn same_browser_resource(existing: &str, requested: &str) -> bool {
-    match (
-        muxal_terminal::path_from_file_uri(existing),
-        muxal_terminal::path_from_file_uri(requested),
-    ) {
-        (Some(existing), Some(requested)) => {
-            let existing = std::fs::canonicalize(&existing).unwrap_or(existing);
-            let requested = std::fs::canonicalize(&requested).unwrap_or(requested);
-            existing == requested
-        }
-        (None, None) => muxal_core::same_resource_url(existing, requested),
-        _ => false,
-    }
-}
-
 /// Where the maximize goes when the user selects `target`. While a maximized
 /// pane is on screen it follows the selection, so picking another agent shows
 /// that agent full-size instead of focusing a pane hidden behind the maximized
@@ -887,17 +868,12 @@ fn agent_icon_obj(program: Option<&str>) -> Icon {
     Icon::empty().path(agent_icon_path(program))
 }
 
-/// SVG path for a preset's icon: a globe for Browser-kind presets, else the
-/// agent icon derived from its program.
+/// SVG path for a preset's icon, derived from its program.
 fn preset_icon_path(preset: &AgentPreset) -> SharedString {
-    if preset.kind == muxal_core::PresetKind::Browser {
-        "icons/globe.svg".into()
-    } else {
-        agent_icon_path(preset.program.as_deref())
-    }
+    agent_icon_path(preset.program.as_deref())
 }
 
-/// A preset's icon as an [`Svg`] (kind-aware — globe for browser presets).
+/// A preset's icon as an [`Svg`].
 fn preset_icon(preset: &AgentPreset, size: Pixels, color: Hsla) -> Svg {
     svg()
         .path(preset_icon_path(preset))
@@ -1948,24 +1924,24 @@ mod resource_lane_tests {
 
     #[test]
     fn chooses_same_kind_lane_nearest_the_requested_anchor() {
-        let left_browser = Uuid::new_v4();
+        let left_editor = Uuid::new_v4();
         let left_terminal = Uuid::new_v4();
         let right_terminal = Uuid::new_v4();
-        let right_browser = Uuid::new_v4();
+        let right_editor = Uuid::new_v4();
         let instances = [
-            (left_browser, InstanceKind::Browser),
+            (left_editor, InstanceKind::Editor),
             (left_terminal, InstanceKind::Terminal),
             (right_terminal, InstanceKind::Terminal),
-            (right_browser, InstanceKind::Browser),
+            (right_editor, InstanceKind::Editor),
         ];
 
         assert_eq!(
-            nearest_kind_instance(&instances, InstanceKind::Browser, Some(right_terminal)),
-            Some(right_browser)
+            nearest_kind_instance(&instances, InstanceKind::Editor, Some(right_terminal)),
+            Some(right_editor)
         );
         assert_eq!(
-            nearest_kind_instance(&instances, InstanceKind::Browser, Some(left_terminal)),
-            Some(left_browser)
+            nearest_kind_instance(&instances, InstanceKind::Editor, Some(left_terminal)),
+            Some(left_editor)
         );
     }
 }
@@ -2141,9 +2117,6 @@ pub struct MuxalApp {
     terminals: HashMap<Uuid, Entity<TerminalView>>,
     /// Live code editors, keyed by instance id (parallel to `terminals`).
     editors: HashMap<Uuid, Entity<EditorView>>,
-    /// Live browser panes, keyed by instance id (parallel to `editors`). On
-    /// Linux these are placeholder views — the real browser is a separate window.
-    browsers: HashMap<Uuid, Entity<crate::browser::BrowserView>>,
     /// The pane the toolbar actions target.
     active_instance: Option<Uuid>,
     /// The agent preset library and the one currently selected for new panes.
@@ -2386,9 +2359,6 @@ pub struct MuxalApp {
     /// Editors awaiting re-dock into the main window (rebuilt in `render`, which
     /// has the main window — gpui-component input focus is window-bound).
     pending_editor_redock: Vec<(Uuid, EditorSnapshot, RedockAnchor)>,
-    /// Browsers awaiting re-dock into the main window, carrying the URL to
-    /// rebuild from (a native webview child can't move between windows).
-    pending_browser_redock: Vec<(Uuid, String, RedockAnchor)>,
     /// Whether the "Quit?" confirmation modal is shown (close was intercepted).
     show_quit_confirm: bool,
     /// Focus handle confirmation dialogs take the moment they open, so Enter
@@ -2525,13 +2495,12 @@ enum PaletteCommand {
     Spider,
 }
 
-/// The live view backing a pane — a terminal, a code editor, or a browser. Lets
+/// The live view backing a pane — a terminal, editor/diff, or Spider map. Lets
 /// the shared pane operations (focus, pop-out) treat them uniformly.
 #[derive(Clone)]
 enum PaneView {
     Terminal(Entity<TerminalView>),
     Editor(Entity<EditorView>),
-    Browser(Entity<crate::browser::BrowserView>),
     Spider(Entity<crate::spider::SpiderView>),
 }
 
@@ -2540,7 +2509,6 @@ impl PaneView {
         match self {
             PaneView::Terminal(v) => v.read(cx).focus_handle(cx),
             PaneView::Editor(v) => v.read(cx).focus_handle(cx),
-            PaneView::Browser(v) => v.read(cx).focus_handle(cx),
             PaneView::Spider(v) => v.read(cx).focus_handle(cx),
         }
     }
@@ -2605,9 +2573,6 @@ impl EditorSnapshot {
 enum PopoutContent {
     Terminal(Entity<TerminalView>),
     Editor(EditorSnapshot),
-    /// Just the URL: the native webview child belongs to the window that built
-    /// it, so the pane is re-created in its new window rather than moved.
-    Browser(String),
     Spider(crate::spider::State),
 }
 
@@ -2742,7 +2707,6 @@ impl PopoutView {
                 })
                 .detach(),
             PaneView::Editor(v) => cx.observe(v, |_, _, cx| cx.notify()).detach(),
-            PaneView::Browser(v) => cx.observe(v, |_, _, cx| cx.notify()).detach(),
             PaneView::Spider(v) => cx.observe(v, |_, _, cx| cx.notify()).detach(),
         }
         Self {
@@ -2765,7 +2729,6 @@ impl PopoutView {
                 .unwrap_or_else(|| "Terminal".to_string())
                 .into(),
             PaneView::Editor(v) => v.read(cx).title().into(),
-            PaneView::Browser(v) => v.read(cx).tab_title().into(),
             PaneView::Spider(_) => t("Spider"),
         }
     }
@@ -2774,7 +2737,6 @@ impl PopoutView {
         match &self.view {
             PaneView::Terminal(v) => terminal_pane_element(v, false, cx),
             PaneView::Editor(v) => v.clone().into_any_element(),
-            PaneView::Browser(v) => v.clone().into_any_element(),
             PaneView::Spider(v) => v.clone().into_any_element(),
         }
     }
@@ -2785,7 +2747,6 @@ impl PopoutView {
         match &self.view {
             PaneView::Terminal(_) => ("Close terminal?", "This terminal will be terminated."),
             PaneView::Editor(_) => ("Close editor?", "Unsaved changes will be lost."),
-            PaneView::Browser(_) => ("Close browser?", "This browser pane will be closed."),
             PaneView::Spider(_) => ("Close Spider?", "This map pane will be closed."),
         }
     }
@@ -3161,15 +3122,6 @@ impl Render for PopoutView {
             cx.defer_in(window, move |_, window, cx| window.focus(&f, cx));
         }
         self.dlg_was_open = dlg_open;
-        // A native webview child draws above all gpui content, so it has to go
-        // away while the close confirmation sits on top of it.
-        if let PaneView::Browser(v) = &self.view {
-            let (v, visible) = (v.clone(), !self.show_close_confirm);
-            let overlay = self.show_close_confirm;
-            v.update(cx, |b, cx| {
-                b.set_native_visible(visible, true, true, overlay, cx)
-            });
-        }
         let root = div()
             .size_full()
             .flex()
@@ -3768,17 +3720,9 @@ fn link_source_project(workspace: &Workspace, source: Option<Uuid>) -> Option<Uu
         .or(workspace.active_project)
 }
 
-/// Web content may request a new browsing context, but it must not gain the
-/// broader file and OS-protocol powers intentionally available to terminal links.
-fn browser_popup_url_allowed(url: &str) -> bool {
-    url.split_once(':').is_some_and(|(scheme, _)| {
-        scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
-    })
-}
-
 #[cfg(test)]
 mod link_source_tests {
-    use super::{Instance, Project, Workspace, browser_popup_url_allowed, link_source_project};
+    use super::{Instance, Project, Workspace, link_source_project};
 
     #[test]
     fn emitting_pane_beats_the_later_active_project() {
@@ -3795,18 +3739,6 @@ mod link_source_tests {
             Some(source_project)
         );
         assert_eq!(link_source_project(&workspace, None), Some(later_project));
-    }
-
-    #[test]
-    fn browser_popups_only_enter_the_router_for_web_urls() {
-        assert!(browser_popup_url_allowed("https://example.com/new"));
-        assert!(browser_popup_url_allowed("HTTP://example.com/new"));
-        assert!(!browser_popup_url_allowed(
-            "file:///C:/Users/test/secret.txt"
-        ));
-        assert!(!browser_popup_url_allowed("mailto:test@example.com"));
-        assert!(!browser_popup_url_allowed("custom-protocol:payload"));
-        assert!(!browser_popup_url_allowed("//example.com/scheme-relative"));
     }
 }
 
@@ -4194,7 +4126,6 @@ impl MuxalApp {
             workspace: Workspace::default(),
             terminals: HashMap::new(),
             editors: HashMap::new(),
-            browsers: HashMap::new(),
             active_instance: None,
             presets,
             current_preset,
@@ -4263,7 +4194,6 @@ impl MuxalApp {
             main_window: Some(window.window_handle()),
             pending_editor_rebuild: Vec::new(),
             pending_editor_redock: Vec::new(),
-            pending_browser_redock: Vec::new(),
             show_quit_confirm: false,
             dialog_focus: cx.focus_handle(),
             main_dlg_was_open: false,
@@ -5214,11 +5144,7 @@ impl MuxalApp {
             .map(|p| p.instances())
             .unwrap_or_default()
             .into_iter()
-            .any(|iid| {
-                !self.terminals.contains_key(&iid)
-                    && !self.editors.contains_key(&iid)
-                    && !self.browsers.contains_key(&iid)
-            });
+            .any(|iid| !self.terminals.contains_key(&iid) && !self.editors.contains_key(&iid));
         if !needs {
             return;
         }
@@ -5459,7 +5385,7 @@ impl MuxalApp {
         let _phase = ui_profile::phase("activation", "spawn-project-pane", Some(iid));
         // A workspace can change while a deferred activation task is yielding.
         // UUIDs from the old document must become no-ops, never fallback shells.
-        let Some((kind, pid)) = self.workspace.instance(iid).map(|i| (i.kind, i.project_id)) else {
+        let Some(kind) = self.workspace.instance(iid).map(|i| i.kind) else {
             return;
         };
         match kind {
@@ -5496,18 +5422,6 @@ impl MuxalApp {
                         let ed = cx.new(|cx| EditorView::diff(dir, config, window, cx));
                         self.editors.insert(iid, ed);
                     }
-                }
-            }
-            InstanceKind::Browser => {
-                if !self.browsers.contains_key(&iid) {
-                    let url = self
-                        .workspace
-                        .instance(iid)
-                        .and_then(|i| i.browser_url.clone())
-                        .unwrap_or_else(|| "about:blank".to_string());
-                    let view =
-                        cx.new(|cx| crate::browser::BrowserView::new(iid, pid, url, window, cx));
-                    self.browsers.insert(iid, view);
                 }
             }
         }
@@ -5615,19 +5529,8 @@ impl MuxalApp {
             self.editors.clear();
         }
         self.pending_editor_redock.clear();
-        self.pending_browser_redock.clear();
         self.spider_ui = spider::SpiderUi::default();
         self.file_browser_root_override = None;
-        // Drop the native webviews with their workspace. Left alive, they keep
-        // instance ids the new workspace will reuse, and the orphaned WebView2
-        // children outlive the panes they belonged to.
-        {
-            let _phase = ui_profile::phase("workspace", "drop-browsers", None);
-            for (iid, browser) in self.browsers.drain() {
-                let _phase = ui_profile::phase("workspace", "drop-browser", Some(iid));
-                drop(browser);
-            }
-        }
         // Close any per-monitor project windows from the previous workspace (the
         // close hook's cleanup no-ops — their records are dropped here first).
         {
@@ -6017,14 +5920,6 @@ impl MuxalApp {
         } else if let Some(ed) = self.editors.get(&iid) {
             let handle = ed.read(cx).focus_handle(cx);
             window.focus(&handle, cx);
-        } else if let Some(bv) = self.browsers.get(&iid) {
-            let handle = bv.read(cx).focus_handle(cx);
-            window.focus(&handle, cx);
-            // Deliberately NOT `focus_native` here. The native webview is a real
-            // child window: once it holds the OS keyboard focus it swallows muxal's
-            // own chords too. Selecting a browser pane with a keyboard shortcut must
-            // leave those working — only a click *into the page* should hand the
-            // keyboard over (see the click handler in the tick).
         } else if let Some(view) = self.spider_ui.views.get(&iid) {
             window.focus(&view.read(cx).focus_handle(cx), cx);
         } else {
@@ -7008,53 +6903,6 @@ impl MuxalApp {
             self.persist();
         }
 
-        // Keep browser panes' URL fresh (the user clicks links inside the
-        // webview): syncs the address bar, tab label, and the persisted
-        // `Instance.browser_url` so a restart restores where they ended up.
-        if !self.browsers.is_empty() {
-            let views: Vec<(Uuid, Entity<crate::browser::BrowserView>)> =
-                self.browsers.iter().map(|(i, v)| (*i, v.clone())).collect();
-            let mut changed = false;
-            let mut new_windows: Vec<(Uuid, String)> = Vec::new();
-            for (iid, view) in views {
-                if let Some(url) = view.update(cx, |v, cx| v.sync(window, cx))
-                    && let Some(inst) = self.workspace.instance_mut(iid)
-                {
-                    inst.browser_url = Some(url);
-                    changed = true;
-                }
-                // Native WebView focus never reaches GPUI. Mirror it into Muxal's
-                // active-pane state, and blur a focused address input once.
-                if view.update(cx, |v, _| v.take_native_focus()) == Some(true) {
-                    let address_focused = view.read(cx).address_focused(window, cx);
-                    if self.active_instance != Some(iid) || address_focused {
-                        if self.active_instance != Some(iid) {
-                            self.focus_instance(iid, window, cx);
-                        } else {
-                            let handle = view.read(cx).focus_handle(cx);
-                            window.focus(&handle, cx);
-                        }
-                        // GPUI focus bookkeeping may move OS focus to the parent.
-                        // Return it once; the resulting GotFocus event is ignored
-                        // next tick because pane and address state are settled.
-                        view.read(cx).focus_native(cx);
-                    }
-                }
-                new_windows.extend(
-                    view.update(cx, |v, _| v.take_new_window_requests())
-                        .into_iter()
-                        .map(|url| (iid, url)),
-                );
-            }
-            for (source, url) in new_windows {
-                if browser_popup_url_allowed(&url) {
-                    self.open_link_from(&url, Some(source), window, cx);
-                }
-            }
-            if changed {
-                self.persist();
-            }
-        }
         // Program availability (installed agents / gh / sshpass) + git status are
         // refreshed off the UI thread so they don't stutter the render loop.
         self.refresh_status(cx);
@@ -8012,46 +7860,8 @@ impl MuxalApp {
             .get(preset_idx)
             .cloned()
             .unwrap_or_else(AgentPreset::shell);
-        // A Browser-kind preset opens a browser pane, not a terminal.
-        if preset.kind == muxal_core::PresetKind::Browser {
-            self.place_browser_url(&preset.url, target, placement, window, cx);
-            return;
-        }
         let instance = Instance::from_preset(pid, &preset);
         self.place_and_spawn(pid, instance, placement, target, None, window, cx);
-    }
-
-    /// Open a browser pane at `url` (a Browser-kind preset's homepage). macOS/
-    /// Windows get an embedded pane in the layout; Linux (which can't host a web
-    /// view in a pane) opens `url` in a separate browser window, like Ctrl+click.
-    fn place_browser_url(
-        &mut self,
-        url: &str,
-        target: Option<Uuid>,
-        placement: PlacementMode,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let url = muxal_core::normalize_url(url);
-        let url = if url.is_empty() {
-            "https://duckduckgo.com".to_string()
-        } else {
-            url
-        };
-        #[cfg(target_os = "linux")]
-        {
-            let _ = (target, placement, window);
-            if !crate::browser::spawn_browser_window(&url) {
-                cx.open_url(&url);
-            }
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            // Browser presets are resource opens, not requests for another agent
-            // process. Route them through the canonical opener so the same full
-            // URL focuses and refreshes its existing tab before placement runs.
-            self.open_browser_at_with_placement(url, target, Some(placement), window, cx);
-        }
     }
 
     /// Create a new agent from the current preset as a tab in the active pane.
@@ -8137,14 +7947,13 @@ impl MuxalApp {
     ) {
         // tmux only when the user wants it AND it's actually installed (unix).
         let kind = instance.kind;
-        let browser_url = instance.browser_url.clone();
         let iid = instance.id;
 
         // An empty project ignores the target/placement and just seeds a pane.
         let empty = self.workspace.project(pid).is_some_and(|p| p.is_empty());
         let placed_target = if empty { None } else { target };
 
-        // tmux sessions and worktrees are terminal-only concerns — a browser pane
+        // tmux sessions and worktrees are terminal-only concerns — a resource pane
         // gets neither.
         if kind == InstanceKind::Terminal {
             // An adopted pane arrives already bound to a session running on a host.
@@ -8214,11 +8023,6 @@ impl MuxalApp {
         // dispatch in `spawn_project_terminals_now`).
         match kind {
             InstanceKind::Spider => self.spawn_spider(iid, window, cx),
-            InstanceKind::Browser => {
-                let url = browser_url.unwrap_or_else(|| "about:blank".to_string());
-                let view = cx.new(|cx| crate::browser::BrowserView::new(iid, pid, url, window, cx));
-                self.browsers.insert(iid, view);
-            }
             _ => self.spawn_terminal_deferred(iid, window, cx),
         }
         self.focus_instance(iid, window, cx);
@@ -8396,16 +8200,12 @@ impl MuxalApp {
         }
     }
 
-    /// Route a ctrl+clicked terminal link: local `file://` paths open in a muxal
-    /// editor pane; other `file://` / disabled-browser cases go to the OS handler;
-    /// otherwise macOS/Windows open an embedded browser pane and Linux spawns the
-    /// separate muxal browser window.
+    /// Open local file links in the editor and all other links through the OS.
     fn open_link(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.open_link_from(url, self.active_instance, window, cx);
     }
 
-    /// Route relative to the pane that emitted the link. Native browser popup
-    /// events arrive on a later tick, when the globally active pane may differ.
+    /// Resolve file links relative to the pane that emitted them.
     fn open_link_from(
         &mut self,
         url: &str,
@@ -8422,35 +8222,10 @@ impl MuxalApp {
                 canonical_url.push('#');
                 canonical_url.push_str(fragment);
             }
-            // Keep the browser URL free of Windows' `\\?\` canonical-path
-            // prefix, but use the canonical path for file identity/editor IO.
+            // Preserve a portable file URI for the OS fallback; canonicalize
+            // the filesystem path for editor identity and I/O.
             if let Ok(canonical) = std::fs::canonicalize(&target.path) {
                 target.path = canonical;
-            }
-            #[cfg(not(target_os = "linux"))]
-            let is_html = target
-                .path
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| {
-                    ext.eq_ignore_ascii_case("html") || ext.eq_ignore_ascii_case("htm")
-                });
-            #[cfg(not(target_os = "linux"))]
-            if is_html
-                && self.settings.browser_enabled
-                && source_project.is_some_and(|pid| {
-                    self.open_browser_in_project(
-                        pid,
-                        canonical_url.clone(),
-                        source,
-                        None,
-                        window,
-                        cx,
-                    )
-                    .is_some()
-                })
-            {
-                return;
             }
             if target.path.is_file()
                 && let Some(pid) = source_project
@@ -8475,32 +8250,7 @@ impl MuxalApp {
             cx.open_url(&canonical_url);
             return;
         }
-        if !self.settings.browser_enabled || url.starts_with("file://") {
-            let _ = window;
-            cx.open_url(url);
-            return;
-        }
-        #[cfg(target_os = "linux")]
-        {
-            if !crate::browser::spawn_browser_window(url) {
-                self.add_event(
-                    NotifKind::Error,
-                    t("Browser"),
-                    t("Couldn't start the browser window — opened in the system browser instead.")
-                        .to_string(),
-                );
-                cx.open_url(url);
-            }
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            if source_project.is_none_or(|pid| {
-                self.open_browser_in_project(pid, url.to_string(), source, None, window, cx)
-                    .is_none()
-            }) {
-                cx.open_url(url);
-            }
-        }
+        cx.open_url(url);
     }
 
     /// Route a link normally, then restore the pane that initiated it. Used by
@@ -8515,96 +8265,9 @@ impl MuxalApp {
         }
     }
 
-    /// Open the embedded browser pane on `url` in the active project, splitting
-    /// beside `target` (or seeding an empty project). Returns the instance id.
-    /// (Linux routes links to the separate browser window instead; restored
-    /// cross-platform browser panes go through spawn_project_terminals_now.)
-    #[cfg(not(target_os = "linux"))]
-    fn open_browser_at(
-        &mut self,
-        url: String,
-        target: Option<Uuid>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<Uuid> {
-        self.open_browser_at_with_placement(url, target, None, window, cx)
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    fn open_browser_at_with_placement(
-        &mut self,
-        url: String,
-        target: Option<Uuid>,
-        placement: Option<PlacementMode>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<Uuid> {
-        let pid = self.workspace.active_project?;
-        self.open_browser_in_project(pid, url, target, placement, window, cx)
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    fn open_browser_in_project(
-        &mut self,
-        pid: Uuid,
-        url: String,
-        target: Option<Uuid>,
-        placement: Option<PlacementMode>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<Uuid> {
-        // Web resources require an exact URL match. Local files reuse by decoded
-        // path so raw/file URI spellings and source fragments share one pane.
-        if let Some(iid) = self
-            .workspace
-            .project(pid)
-            .map(|p| p.instances())
-            .unwrap_or_default()
-            .into_iter()
-            .find(|iid| {
-                self.workspace.instance(*iid).is_some_and(|instance| {
-                    instance.kind == InstanceKind::Browser
-                        && instance
-                            .browser_url
-                            .as_deref()
-                            .is_some_and(|existing| same_browser_resource(existing, &url))
-                })
-            })
-        {
-            if let Some(instance) = self.workspace.instance_mut(iid) {
-                instance.browser_url = Some(url.clone());
-            }
-            if let Some(view) = self.browsers.get(&iid).cloned() {
-                view.update(cx, |v, cx| {
-                    if v.url() == url {
-                        v.reload(cx);
-                    } else {
-                        v.navigate(&url, cx);
-                    }
-                });
-            }
-            self.focus_instance(iid, window, cx);
-            self.persist();
-            cx.notify();
-            return Some(iid);
-        }
-        let instance = Instance::browser(pid, url.clone());
-        let iid = instance.id;
-        if !self.place_resource_instance(pid, instance, target, placement) {
-            return None;
-        }
-        let view = cx.new(|cx| crate::browser::BrowserView::new(iid, pid, url, window, cx));
-        self.browsers.insert(iid, view);
-        self.focus_instance(iid, window, cx);
-        self.persist();
-        cx.notify();
-        Some(iid)
-    }
-
     fn profiled_focus_owner(
         &self,
         current: Option<&FocusHandle>,
-        window: &Window,
         cx: &App,
     ) -> ui_profile::GpuiFocusOwner {
         let Some(current) = current else {
@@ -8631,21 +8294,6 @@ impl MuxalApp {
             if current == &editor.read(cx).focus_handle(cx) {
                 return ui_profile::GpuiFocusOwner {
                     kind: ui_profile::GpuiFocusOwnerKind::Editor,
-                    pane: Some(*pane),
-                };
-            }
-        }
-        for (pane, browser) in &self.browsers {
-            let browser = browser.read(cx);
-            if browser.address_focused(window, cx) {
-                return ui_profile::GpuiFocusOwner {
-                    kind: ui_profile::GpuiFocusOwnerKind::BrowserAddress,
-                    pane: Some(*pane),
-                };
-            }
-            if current == &browser.focus_handle(cx) {
-                return ui_profile::GpuiFocusOwner {
-                    kind: ui_profile::GpuiFocusOwnerKind::Browser,
                     pane: Some(*pane),
                 };
             }
@@ -8682,7 +8330,7 @@ impl MuxalApp {
 
     fn profile_focus_path_lost(&self, window: &Window, cx: &App) {
         let current_handle = window.focused(cx);
-        let current = self.profiled_focus_owner(current_handle.as_ref(), window, cx);
+        let current = self.profiled_focus_owner(current_handle.as_ref(), cx);
         let current_tracked = current_handle
             .as_ref()
             .is_some_and(|handle| self.focus_handle.contains(handle, window));
@@ -8704,10 +8352,6 @@ impl MuxalApp {
                 let handle = view.read(cx).focus_handle(cx);
                 active.kind = ui_profile::GpuiFocusOwnerKind::Editor;
                 active_tracked = self.focus_handle.contains(&handle, window);
-            } else if let Some(view) = self.browsers.get(&pane) {
-                let handle = view.read(cx).focus_handle(cx);
-                active.kind = ui_profile::GpuiFocusOwnerKind::Browser;
-                active_tracked = self.focus_handle.contains(&handle, window);
             } else {
                 active.kind = ui_profile::GpuiFocusOwnerKind::Unknown;
             }
@@ -8724,9 +8368,7 @@ impl MuxalApp {
         );
     }
 
-    /// Any overlay that draws above the pane area. The native browser webviews
-    /// float above ALL gpui content, so they must hide beneath these.
-    /// NOTE: every new modal/palette/menu flag MUST be added here (see AGENTS.md).
+    /// Whether an overlay is visible, for the opt-in focus diagnostics.
     fn any_overlay_open(&self, cx: &App) -> bool {
         self.show_settings
             || self.show_search_palette
@@ -8751,121 +8393,6 @@ impl MuxalApp {
             || self.term_search.is_some()
             || !self.pending_worktree_dispose.is_empty()
             || cx.has_active_drag()
-    }
-
-    /// Browser instances whose pane content is actually on screen: the shown tab
-    /// of each leaf in the active project (respecting maximize + dashboard).
-    fn visible_browser_ids(&self) -> Vec<Uuid> {
-        if self.browsers.is_empty() || self.show_dashboard {
-            return Vec::new();
-        }
-        let Some(project) = self.workspace.active() else {
-            return Vec::new();
-        };
-        fn walk(
-            node: &PaneNode,
-            active_instance: Option<Uuid>,
-            browsers: &HashMap<Uuid, Entity<crate::browser::BrowserView>>,
-            out: &mut Vec<Uuid>,
-        ) {
-            match node {
-                PaneNode::Leaf(ld) => {
-                    // Mirror render_pane: a pane holding the focused instance
-                    // shows it; others show their own saved active tab.
-                    //
-                    // Also mirror its empty-leaf guard. `pane.rs` prunes an
-                    // emptied leaf in the same mutation and `LeafData` refuses to
-                    // deserialize `"tabs": []`, so this should be unreachable —
-                    // but this walk runs every frame, so an index panic here
-                    // would take the whole UI down.
-                    if ld.tabs.is_empty() {
-                        return;
-                    }
-                    let leaf_active = ld.active.min(ld.tabs.len().saturating_sub(1));
-                    let iid = match active_instance {
-                        Some(a) if ld.tabs.contains(&a) => a,
-                        _ => ld.tabs[leaf_active],
-                    };
-                    if browsers.contains_key(&iid) {
-                        out.push(iid);
-                    }
-                }
-                PaneNode::Split { children, .. } => {
-                    for child in children {
-                        walk(child, active_instance, browsers, out);
-                    }
-                }
-            }
-        }
-        let mut out = Vec::new();
-        if let Some(layout) = &project.layout {
-            // A maximized pane's window shows only its tab group, as render does.
-            let root = self
-                .maximized
-                .and_then(|m| layout.leaf_containing(m))
-                .unwrap_or(layout);
-            walk(root, self.active_instance, &self.browsers, &mut out);
-        }
-        // Projects shown in secondary (per-monitor) windows render there.
-        for sec in &self.secondary_windows {
-            if let Some(layout) = self
-                .workspace
-                .project(sec.pid)
-                .and_then(|p| p.layout.as_ref())
-            {
-                let root = self
-                    .maximized
-                    .and_then(|m| layout.leaf_containing(m))
-                    .unwrap_or(layout);
-                walk(root, self.active_instance, &self.browsers, &mut out);
-            }
-        }
-        out
-    }
-
-    /// Show/hide the native browser webviews to match what's actually visible
-    /// this frame (deferred so it runs right after the render pass).
-    fn sync_browser_visibility(&self, cx: &mut Context<Self>) {
-        if self.browsers.is_empty() {
-            return;
-        }
-        let overlay = self.any_overlay_open(cx);
-        let profile_visibility = cfg!(target_os = "windows") && ui_profile::is_enabled();
-        let pane_active = if overlay && !profile_visibility {
-            Vec::new()
-        } else {
-            self.visible_browser_ids()
-        };
-        let active_projects = profile_visibility.then(|| {
-            let mut active: HashSet<Uuid> = self.workspace.active_project.into_iter().collect();
-            active.extend(self.secondary_windows.iter().map(|window| window.pid));
-            active
-        });
-        let updates: Vec<_> = self
-            .browsers
-            .iter()
-            .map(|(iid, view)| {
-                let project_active = active_projects.as_ref().is_some_and(|active| {
-                    self.workspace
-                        .instance(*iid)
-                        .is_some_and(|instance| active.contains(&instance.project_id))
-                });
-                let pane_active = pane_active.contains(iid);
-                (
-                    view.clone(),
-                    !overlay && pane_active,
-                    project_active,
-                    pane_active,
-                )
-            })
-            .collect();
-        cx.defer(move |cx| {
-            for (view, show, project_active, pane_active) in updates {
-                view.update(cx, |v, cx| {
-                    v.set_native_visible(show, project_active, pane_active, overlay, cx)
-                });
-            }
-        });
     }
 
     /// Open `path` (None = a new Untitled buffer) as an editor pane in `pid`,
@@ -9853,8 +9380,6 @@ impl MuxalApp {
         self.spider_ui.views.remove(&iid);
         self.spider_ui.redocks.retain(|(id, _, _)| *id != iid);
         self.prune_spider_scans(cx);
-        // Dropping a BrowserView hides its native webview (gpui-wry Drop impl).
-        self.browsers.remove(&iid);
 
         // Tear down tmux (local or remote) + worktree (capture info before drop).
         let info = self.workspace.instance(iid).map(|i| {
@@ -11541,8 +11066,8 @@ impl MuxalApp {
                     this.toggle_dev_console(cx);
                 }
             }))
-            // A ctrl+clicked terminal link: URLs go to the built-in browser when
-            // enabled (embedded pane / Linux browser window), files to the OS.
+            // A deliberate terminal link: local files open in the editor;
+            // web URLs use the system default browser.
             .on_action(
                 cx.listener(|this, a: &muxal_terminal::OpenLink, window, cx| {
                     let url = a.0.clone();
@@ -11710,8 +11235,6 @@ impl MuxalApp {
             PopoutContent::Terminal(view)
         } else if let Some(ed) = self.editors.remove(&iid) {
             PopoutContent::Editor(EditorSnapshot::capture(&ed, cx))
-        } else if let Some(bv) = self.browsers.remove(&iid) {
-            PopoutContent::Browser(bv.read(cx).url().to_string())
         } else if let Some(view) = self.spider_ui.views.remove(&iid) {
             PopoutContent::Spider(view.read(cx).capture())
         } else {
@@ -11753,7 +11276,6 @@ impl MuxalApp {
                 let content = match &content {
                     PopoutContent::Terminal(v) => PopoutContent::Terminal(v.clone()),
                     PopoutContent::Editor(s) => PopoutContent::Editor(s.clone()),
-                    PopoutContent::Browser(u) => PopoutContent::Browser(u.clone()),
                     PopoutContent::Spider(state) => PopoutContent::Spider(state.clone()),
                 };
                 move |window, cx| {
@@ -11762,19 +11284,15 @@ impl MuxalApp {
                         window,
                     );
                     window.set_window_title(&title);
-                    let pane =
-                        match content {
-                            PopoutContent::Terminal(view) => PaneView::Terminal(view),
-                            PopoutContent::Spider(state) => PaneView::Spider(
-                                cx.new(|cx| crate::spider::SpiderView::new(state, window, cx)),
-                            ),
-                            PopoutContent::Editor(snap) => {
-                                PaneView::Editor(snap.build(config, window, cx))
-                            }
-                            PopoutContent::Browser(url) => PaneView::Browser(cx.new(|cx| {
-                                crate::browser::BrowserView::new(iid, pid, url, window, cx)
-                            })),
-                        };
+                    let pane = match content {
+                        PopoutContent::Terminal(view) => PaneView::Terminal(view),
+                        PopoutContent::Spider(state) => PaneView::Spider(
+                            cx.new(|cx| crate::spider::SpiderView::new(state, window, cx)),
+                        ),
+                        PopoutContent::Editor(snap) => {
+                            PaneView::Editor(snap.build(config, window, cx))
+                        }
+                    };
                     let fh = pane.focus_handle(cx);
                     ui_profile::focus_action(
                         ui_profile::FocusActionReason::FocusInstance,
@@ -11830,11 +11348,6 @@ impl MuxalApp {
                         self.attach_spider(iid, &view, window, cx);
                         self.spider_ui.views.insert(iid, view);
                     }
-                    PopoutContent::Browser(url) => {
-                        let bv = cx
-                            .new(|cx| crate::browser::BrowserView::new(iid, pid, url, window, cx));
-                        self.browsers.insert(iid, bv);
-                    }
                 }
                 self.redock_into_layout(iid, pid, redock, cx);
             }
@@ -11868,14 +11381,6 @@ impl MuxalApp {
                     .push((iid, view.read(cx).capture(), Some(popout.redock)));
                 cx.notify();
             }
-            PaneView::Browser(bv) => {
-                // Same deal, for the opposite reason: the native webview child is
-                // owned by the pop-out window, so it dies with it and the pane is
-                // rebuilt against the main window in `render`.
-                let url = bv.read(cx).url().to_string();
-                self.pending_browser_redock.push((iid, url, popout.redock));
-                cx.notify();
-            }
         }
     }
 
@@ -11899,21 +11404,6 @@ impl MuxalApp {
             let ed = snap.build(config.clone(), window, cx);
             self.editors.insert(iid, ed);
             if let Some(pid) = self.workspace.instance(iid).map(|i| i.project_id) {
-                self.redock_into_layout(iid, pid, redock, cx);
-            }
-        }
-    }
-
-    /// Rebuild any browsers awaiting re-dock into the main window. Called from
-    /// `render`, which holds the main window the new webview must be a child of.
-    fn drain_browser_redocks(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.pending_browser_redock.is_empty() {
-            return;
-        }
-        for (iid, url, redock) in std::mem::take(&mut self.pending_browser_redock) {
-            if let Some(pid) = self.workspace.instance(iid).map(|i| i.project_id) {
-                let bv = cx.new(|cx| crate::browser::BrowserView::new(iid, pid, url, window, cx));
-                self.browsers.insert(iid, bv);
                 self.redock_into_layout(iid, pid, redock, cx);
             }
         }
@@ -12040,8 +11530,7 @@ impl MuxalApp {
             InstanceKind::Terminal => self.settings.confirm_close_terminal,
             InstanceKind::Editor => self.settings.confirm_close_editor,
             InstanceKind::Diff => self.settings.confirm_close_diff,
-            // Browsers are cheap to reopen (the URL is persisted anyway).
-            InstanceKind::Browser | InstanceKind::Spider => false,
+            InstanceKind::Spider => false,
         }
     }
 
@@ -12081,7 +11570,7 @@ impl MuxalApp {
             let (noun, verb) = match kind {
                 InstanceKind::Terminal => (t("terminal"), t("terminated")),
                 InstanceKind::Editor => (t("editor"), t("closed")),
-                InstanceKind::Diff | InstanceKind::Browser => (t("diff"), t("closed")),
+                InstanceKind::Diff => (t("diff"), t("closed")),
                 InstanceKind::Spider => (t("Spider"), t("closed")),
             };
             let name = self
@@ -12243,7 +11732,7 @@ impl MuxalApp {
     }
 
     /// Whether the active pane runs a process (an agent/terminal, not an editor,
-    /// diff or browser). Uses the persisted instance kind (authoritative), not the
+    /// diff or Spider). Uses the persisted instance kind (authoritative), not the
     /// live `terminals` map — a tombstoned or failed pane still counts.
     fn active_is_terminal(&self) -> bool {
         self.active_instance
@@ -12266,7 +11755,7 @@ impl MuxalApp {
         let Some(inst) = self.workspace.instance(iid) else {
             return;
         };
-        // Editors, diffs and browsers have no process (respawning would put a
+        // Editors, diffs and Spider panes have no process (respawning would put a
         // shell over them).
         if inst.kind != InstanceKind::Terminal {
             return;
@@ -14167,9 +13656,6 @@ impl MuxalApp {
         if let Some(ed) = self.editors.get(&iid) {
             return ed.read(cx).title().into();
         }
-        if let Some(bv) = self.browsers.get(&iid) {
-            return bv.read(cx).tab_title().into();
-        }
         if let Some(instance) = inst {
             let live_title = self.terminals.get(&iid).and_then(|v| v.read(cx).title());
             if let Some(name) = authoritative_terminal_auto_title(
@@ -14430,19 +13916,6 @@ impl MuxalApp {
                         )
                         .child(ed.clone())
                         .into_any_element()
-                } else if let Some(bv) = self.browsers.get(&iid) {
-                    div()
-                        .size_full()
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, _e, window, cx| {
-                                if this.active_instance != Some(iid) {
-                                    this.focus_instance(iid, window, cx);
-                                }
-                            }),
-                        )
-                        .child(bv.clone())
-                        .into_any_element()
                 } else if let Some(view) = self.spider_ui.views.get(&iid) {
                     div()
                         .size_full()
@@ -14662,31 +14135,6 @@ impl MuxalApp {
                                         if let Some(ed) = this.editors.get(&iid).cloned() {
                                             ed.update(cx, |e, cx| e.toggle_rendered(cx));
                                         }
-                                    }))
-                            }),
-                    )
-                    .children(
-                        self.editors
-                            .get(&iid)
-                            .filter(|editor| editor.read(cx).is_html())
-                            .map(|_| {
-                                Button::new(SharedString::from(format!("preview-html-{sid}")))
-                                    .ghost()
-                                    .with_size(sz)
-                                    .label(t("Preview"))
-                                    .tooltip(t("Preview HTML in the browser"))
-                                    .on_click(cx.listener(move |this, _e, window, cx| {
-                                        #[cfg(not(target_os = "linux"))]
-                                        if let Some(path) = this
-                                            .editors
-                                            .get(&iid)
-                                            .and_then(|editor| editor.read(cx).path().map(PathBuf::from))
-                                        {
-                                            let url = muxal_terminal::file_uri(&path);
-                                            let _ = this.open_browser_at(url, Some(iid), window, cx);
-                                        }
-                                        #[cfg(target_os = "linux")]
-                                        let _ = (this, window, cx);
                                     }))
                             }),
                     )
@@ -17228,8 +16676,6 @@ impl MuxalApp {
                         )
                     } else if let Some(ed) = self.editors.get(&iid) {
                         (ed.read(cx).title(), AgentStatus::Idle)
-                    } else if let Some(bv) = self.browsers.get(&iid) {
-                        (bv.read(cx).tab_title(), AgentStatus::Idle)
                     } else {
                         (meta, AgentStatus::Idle)
                     };
@@ -18550,7 +17996,6 @@ impl MuxalApp {
         };
         self.settings_ui.selected_preset = Some(idx);
         self.settings_ui.p_injection = p.injection.clone();
-        self.settings_ui.p_kind = p.kind;
         let inj_flag = match &p.injection {
             InjectionMode::CliFlag { flag } => flag.clone(),
             _ => String::new(),
@@ -18569,8 +18014,6 @@ impl MuxalApp {
         let ui = &self.settings_ui;
         ui.p_name
             .update(cx, |s, cx| s.set_value(p.name.clone(), window, cx));
-        ui.p_url
-            .update(cx, |s, cx| s.set_value(p.url.clone(), window, cx));
         ui.p_program.update(cx, |s, cx| {
             s.set_value(p.program.clone().unwrap_or_default(), window, cx)
         });
@@ -18721,18 +18164,10 @@ impl MuxalApp {
             InjectionMode::TypeIn => InjectionMode::TypeIn,
             InjectionMode::None => InjectionMode::None,
         };
-        let kind = self.settings_ui.p_kind;
-        let url = self.settings_ui.p_url.read(cx).value().trim().to_string();
         let p = &mut self.presets[idx];
         if !name.is_empty() {
             p.name = name;
         }
-        p.kind = kind;
-        p.url = if kind == muxal_core::PresetKind::Browser && !url.is_empty() {
-            muxal_core::normalize_url(&url)
-        } else {
-            url
-        };
         p.program = (!program.is_empty()).then_some(program);
         p.model = (!model.is_empty()).then_some(model);
         p.model_flag = (!model_flag.is_empty()).then_some(model_flag);
@@ -21004,28 +20439,6 @@ impl MuxalApp {
             ))
             .child(
                 self.check_row(
-                    Checkbox::new("b-browser")
-                        .checked(self.settings.browser_enabled)
-                        .on_click(cx.listener(|this, c: &bool, _w, cx| {
-                            this.settings.browser_enabled = *c;
-                            this.persist_settings();
-                            // Windows only: the embedded webview needs a
-                            // compositor flag set before gpui starts (see
-                            // main.rs), so a mid-session change takes full
-                            // effect on the next launch.
-                            #[cfg(target_os = "windows")]
-                            this.add_event(
-                                NotifKind::Success,
-                                t("Browser"),
-                                t("Restart muxal to fully apply the browser change.").to_string(),
-                            );
-                            cx.notify();
-                        })),
-                    &t("Open ctrl+clicked links in the built-in browser (off = system browser)"),
-                ),
-            )
-            .child(
-                self.check_row(
                     Checkbox::new("b-minimize-tray")
                         .checked(self.settings.minimize_to_tray)
                         .on_click(
@@ -21777,39 +21190,7 @@ impl MuxalApp {
             .max_w(px(560.0))
             .child(self.settings_label(&t("Name"), cx))
             .child(Self::wide_input(Input::new(&ui.p_name)))
-            .child(self.settings_label(&t("Type"), cx))
-            .child(
-                div()
-                    .flex()
-                    .gap_1()
-                    .child(
-                        Button::new("pk-terminal")
-                            .ghost()
-                            .selected(ui.p_kind == muxal_core::PresetKind::Terminal)
-                            .label(t("Agent"))
-                            .on_click(cx.listener(|this, _e, _w, cx| {
-                                this.settings_ui.p_kind = muxal_core::PresetKind::Terminal;
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        Button::new("pk-browser")
-                            .ghost()
-                            .selected(ui.p_kind == muxal_core::PresetKind::Browser)
-                            .label(t("Browser"))
-                            .on_click(cx.listener(|this, _e, _w, cx| {
-                                this.settings_ui.p_kind = muxal_core::PresetKind::Browser;
-                                cx.notify();
-                            })),
-                    ),
-            )
-            .children((ui.p_kind == muxal_core::PresetKind::Browser).then(|| {
-                v_flex()
-                    .gap_2()
-                    .child(self.settings_label(&t("Homepage URL"), cx))
-                    .child(Self::wide_input(Input::new(&ui.p_url)))
-            }))
-            .children((ui.p_kind == muxal_core::PresetKind::Terminal).then(|| {
+            .child({
                 v_flex()
                     .gap_2()
                     .child(self.settings_label(&t("Program (blank = default shell)"), cx))
@@ -21910,7 +21291,7 @@ impl MuxalApp {
                         self.settings_label(&t("Runner startup delay (ms after first output)"), cx),
                     )
                     .child(Self::wide_input(Input::new(&ui.p_startup_delay)))
-            }))
+            })
             .child(
                 div()
                     .flex()
@@ -22219,9 +21600,6 @@ impl Focusable for MuxalApp {
 impl Render for MuxalApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let _render = ui_profile::watch_render_build(ui_profile::RenderView::Main);
-        // Native browser webviews draw above all gpui content in their bounds —
-        // keep them shown/hidden in lockstep with what this frame displays.
-        self.sync_browser_visibility(cx);
         // Confirmation dialogs take keyboard focus the moment they open so
         // Enter confirms / Escape cancels from the keyboard (v0.4.0 feature).
         let dlg_open = self.show_quit_confirm
@@ -22281,9 +21659,8 @@ impl Render for MuxalApp {
                 .into_any_element();
             return ui_profile::finish_render(ui_profile::RenderView::Main, _render, root);
         }
-        // Rebuild any editors/browsers awaiting re-dock (needs the main window).
+        // Rebuild editors awaiting re-dock (needs the main window).
         self.drain_editor_redocks(window, cx);
-        self.drain_browser_redocks(window, cx);
         self.rebuild_spiders(window, cx);
         self.sync_spider_visibility(cx);
 
@@ -23158,35 +22535,6 @@ mod file_walk_tests {
         );
 
         let _ = fs::remove_dir_all(&root);
-    }
-}
-
-#[cfg(test)]
-mod browser_resource_tests {
-    use super::same_browser_resource;
-
-    #[test]
-    fn local_file_fragments_share_one_browser_resource() {
-        assert!(same_browser_resource(
-            "file:///D:/dev/moxie/joke.html",
-            "file:///D:/dev/moxie/joke.html#L42"
-        ));
-        assert!(same_browser_resource(
-            "file:///D:/dev/moxie/joke.html#",
-            "file:///D:/dev/moxie/joke.html"
-        ));
-        assert!(!same_browser_resource(
-            "file:///D:/dev/moxie/joke.html",
-            "file:///D:/dev/moxie/other.html"
-        ));
-    }
-
-    #[test]
-    fn web_fragments_remain_distinct_resources() {
-        assert!(!same_browser_resource(
-            "https://example.com/page#a",
-            "https://example.com/page#b"
-        ));
     }
 }
 

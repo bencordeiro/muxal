@@ -6,6 +6,7 @@ mod agent;
 pub mod ambience;
 mod appimage;
 pub mod autopilot;
+pub mod compat;
 pub mod diff;
 pub mod geometry;
 mod gui_path;
@@ -18,11 +19,10 @@ mod shell;
 pub mod spider;
 pub mod tmux;
 pub mod update;
-pub mod url;
 pub mod worktree;
 
 pub use agent::{
-    AgentPreset, EnvVar, InjectionMode, MEMORY_DIR, MEMORY_FILE, PresetKind, ResolvedLaunch,
+    AgentPreset, EnvVar, InjectionMode, MEMORY_DIR, MEMORY_FILE, ResolvedLaunch,
     append_agent_instruction, claude_session_path, codex_developer_instructions_override,
     codex_latest_session_id, codex_session_exists, codex_session_id_from_title,
     codex_session_matches_cwd, codex_session_names, codex_terminal_title_override, memory_header,
@@ -41,7 +41,6 @@ pub use pane::{
     set_split_sizes, set_tab_order, split, split_beside, swap_instances, swap_panes,
 };
 pub use shell::{join_words, sh_quote, split_words};
-pub use url::{normalize_url, same_resource_url};
 pub use worktree::Worktree;
 
 use serde::{Deserialize, Serialize};
@@ -60,10 +59,6 @@ pub enum InstanceKind {
     /// A read-only git-diff pane. `editor_path` holds the directory to diff
     /// (the agent's worktree, or the project root).
     Diff,
-    /// An embedded web-browser pane (`browser_url` holds the current URL).
-    /// Only macOS/Windows render these embedded; Linux opens links in a
-    /// separate browser window instead.
-    Browser,
     /// A native project structure/activity map (no terminal process).
     Spider,
 }
@@ -477,9 +472,6 @@ pub struct Instance {
     /// For editor panes: the file on disk (None = an unsaved "Untitled" buffer).
     #[serde(default)]
     pub editor_path: Option<PathBuf>,
-    /// For browser panes: the current URL (kept fresh so a restart restores it).
-    #[serde(default)]
-    pub browser_url: Option<String>,
     #[serde(default)]
     pub spider: Option<spider::Config>,
     /// User-assigned name; when set it fully replaces the agent's own title.
@@ -637,7 +629,6 @@ impl Instance {
             title: preset.name.clone(),
             kind: InstanceKind::Terminal,
             editor_path: None,
-            browser_url: None,
             spider: None,
             custom_name: None,
             auto_name: None,
@@ -679,16 +670,6 @@ impl Instance {
         }
     }
 
-    /// Create an embedded-browser instance showing `url`.
-    pub fn browser(project_id: Uuid, url: String) -> Self {
-        Self {
-            kind: InstanceKind::Browser,
-            browser_url: Some(url),
-            title: "Browser".to_string(),
-            ..Self::editor(project_id, None)
-        }
-    }
-
     pub fn spider(project_id: Uuid, config: spider::Config) -> Self {
         Self {
             kind: InstanceKind::Spider,
@@ -711,7 +692,6 @@ impl Instance {
             title,
             kind: InstanceKind::Editor,
             editor_path: path,
-            browser_url: None,
             spider: None,
             custom_name: None,
             auto_name: None,
@@ -1594,11 +1574,6 @@ pub struct Settings {
     pub default_use_worktree: bool,
     #[serde(default = "default_true")]
     pub notifications_enabled: bool,
-    /// Open ctrl+clicked terminal links in the built-in browser (an embedded
-    /// pane on macOS/Windows, a separate muxal-managed window on Linux). Off →
-    /// links open in the system default browser.
-    #[serde(default = "default_true")]
-    pub browser_enabled: bool,
     /// Manual prepare/review/start handoff controls (opt in).
     #[serde(default)]
     pub handoffs_enabled: bool,
@@ -1911,7 +1886,6 @@ impl Default for Settings {
             default_use_tmux: true,
             default_use_worktree: false,
             notifications_enabled: true,
-            browser_enabled: true,
             handoffs_enabled: false,
             spider_enabled: false,
             close_on_exit: true,
@@ -1964,7 +1938,8 @@ impl Default for Settings {
 /// v14: migrated the built-in Grok preset from delayed TypeIn to `--rules`.
 /// v15: repaired Grok presets saved with the generic Claude-only prompt flag.
 /// v16: added the Windows Git Bash preset.
-pub const PRESET_SEED_VERSION: u32 = 17;
+/// v18: retired web-browser presets; only terminal agents remain.
+pub const PRESET_SEED_VERSION: u32 = 18;
 
 /// Current version of the Terms of Service / Privacy notice. Bump this when the
 /// terms change so users are asked to accept again on next launch (see
