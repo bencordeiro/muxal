@@ -15,6 +15,7 @@ pub mod memory;
 mod pane;
 pub mod search;
 mod shell;
+pub mod spider;
 pub mod tmux;
 pub mod update;
 pub mod url;
@@ -63,6 +64,8 @@ pub enum InstanceKind {
     /// Only macOS/Windows render these embedded; Linux opens links in a
     /// separate browser window instead.
     Browser,
+    /// A native project structure/activity map (no terminal process).
+    Spider,
 }
 
 /// Persisted lifecycle timestamps for an agent pane.
@@ -477,6 +480,8 @@ pub struct Instance {
     /// For browser panes: the current URL (kept fresh so a restart restores it).
     #[serde(default)]
     pub browser_url: Option<String>,
+    #[serde(default)]
+    pub spider: Option<spider::Config>,
     /// User-assigned name; when set it fully replaces the agent's own title.
     #[serde(default)]
     pub custom_name: Option<String>,
@@ -633,6 +638,7 @@ impl Instance {
             kind: InstanceKind::Terminal,
             editor_path: None,
             browser_url: None,
+            spider: None,
             custom_name: None,
             auto_name: None,
             program: preset.program.clone(),
@@ -683,6 +689,15 @@ impl Instance {
         }
     }
 
+    pub fn spider(project_id: Uuid, config: spider::Config) -> Self {
+        Self {
+            kind: InstanceKind::Spider,
+            spider: Some(config),
+            title: "Spider".into(),
+            ..Self::editor(project_id, None)
+        }
+    }
+
     /// Create an editor instance for an optional file path (None = Untitled).
     pub fn editor(project_id: Uuid, path: Option<PathBuf>) -> Self {
         let title = path
@@ -697,6 +712,7 @@ impl Instance {
             kind: InstanceKind::Editor,
             editor_path: path,
             browser_url: None,
+            spider: None,
             custom_name: None,
             auto_name: None,
             program: None,
@@ -1586,6 +1602,9 @@ pub struct Settings {
     /// Manual prepare/review/start handoff controls (opt in).
     #[serde(default)]
     pub handoffs_enabled: bool,
+    /// Native project-map panes (opt in; no scanning while disabled).
+    #[serde(default)]
+    pub spider_enabled: bool,
     /// Close a pane automatically when its process exits.
     #[serde(default = "default_true")]
     pub close_on_exit: bool,
@@ -1894,6 +1913,7 @@ impl Default for Settings {
             notifications_enabled: true,
             browser_enabled: true,
             handoffs_enabled: false,
+            spider_enabled: false,
             close_on_exit: true,
             confirm_close_terminal: true,
             confirm_close_editor: false,

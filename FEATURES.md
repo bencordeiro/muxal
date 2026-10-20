@@ -278,6 +278,73 @@ feature is added or changed, update the matching entry here in the same change**
 - **Ephemeral + restore-safe** — on app restore a runner re-types its prompt but
   does not auto-submit.
 
+## Spider map
+
+- **Optional project-map panes** — enable **Spider map** under Settings → Behavior
+  (off by default), then choose Spider in a pane's new-tab/split picker, the
+  project menu, or the command palette. A Spider tab uses the normal resize,
+  split, move, duplicate, maximize, pop-out, and restore flows. Disabling stops
+  its scan jobs and preserves existing tabs as disabled placeholders.
+- **Structure and activity** — switch between radial and branching-tree layouts
+  and independently choose Structure or Git activity in **View**. Node sizes
+  represent physical text lines, with exact counts and file sizes in **Inspect**;
+  folders aggregate their descendants. Git activity colors recent commits from
+  the selected checkout's last 30 days, with outlines for uncommitted changes.
+  Limited history, partial inventory, and unavailable metrics are reported.
+- **Explore compactly** — pan by dragging the map background, zoom at the pointer,
+  Fit, select nodes, expand/collapse folders, and focus an area. **Find** locates
+  paths, including entries hidden by the visible-node limit. Inspect lists a
+  folder's children in pages, opens files through the existing editor, and reveals
+  paths in the file browser. Double-click/Enter opens a file or expands/collapses
+  a folder within the existing map, retaining parent and sibling context while
+  readable. Crowded expansions focus the chosen subtree; double-click its center,
+  use Back, or press Backspace to restore the previous view and camera. Crowding
+  uses pane size, fitted node/label geometry, and the visible-node budget.
+  Existing label suppression in the overview does not force a small expansion
+  into subtree focus; the expansion must worsen label crowding or hit a hard
+  space/node limit.
+  The checkout label in the header returns directly to its root overview, even
+  with View closed; Back restores the preceding view. View hides the redundant
+  Checkout row when the current project root is the only choice; worktree
+  selection and recovery from a missing checkout remain available.
+  Space also expands/collapses, F fits, and `/` opens Find while the map has focus.
+- **Explicit checkout and bounded work** — maps can show the project root or a
+  named worktree without joining or creating a worktree. Scope, layout, and
+  overlay choices persist per tab. Inventory respects Git ignores while keeping
+  tracked files; symlinks and nested repositories are boundaries. Scanning runs
+  off the UI thread, and maps of the same checkout share
+  results. Spider creates no files inside the project.
+- **Recent file activity** — an independent, default-off **Recent activity**
+  toggle adds a cyan glow for 25 seconds after an observed change. Another change
+  restarts the fade. Edited files glow when visible; hidden changes light up
+  only their nearest visible containing folder. The project root stays quiet,
+  and opening/collapsing a branch moves the glow without restarting its clock.
+  This indicates file changes, without attributing them to an agent. Native
+  observation is shared per checkout and stops when no enabled map is visible;
+  the activity observer reads no source contents and never polls the whole project.
+  Detected new, renamed, or removed paths automatically refresh the inventory.
+  Bursts are batched, scans start at most once per five seconds per checkout,
+  and changes received during a scan remain pending. The camera and expanded
+  branches are preserved. A failed scan waits for manual Refresh to retry.
+- **Rust code connections** — an independent, default-off **Code connections**
+  toggle shows the selected file's resolved Rust module declarations and
+  module-level imports, including local workspace dependencies and re-exports.
+  Cyan arrows mean uses, purple means used by; **Indirect** includes up to three
+  steps with dashed links. Related files are revealed within the visible-node
+  budget; remaining hidden targets end at visible ancestor folders. Inspect
+  lists exact paths and lets you select them. External imports,
+  unresolved paths, and partial analysis are reported. This is a static import
+  map, without compiler execution, macro expansion, cfg evaluation, or runtime
+  call inference; other project languages are not analyzed yet.
+- **Saved-source updates** — while connections are enabled and visible, saved
+  changes update cached source facts and links. Text-line metrics and the file
+  inventory update through **Refresh**, or an automatic inventory refresh when
+  Recent activity detects added/removed/renamed paths. With only Code connections
+  enabled, membership changes show a manual refresh hint. Source parsing,
+  native watches, event bursts, and pending
+  results have explicit limits; large graphs cannot accumulate behind a blocked
+  UI. Both optional toggles and the indirect choice persist per tab.
+
 ## Agent handoffs
 
 - **Manual prepare → review → start** — opt in under Settings → Behavior, then

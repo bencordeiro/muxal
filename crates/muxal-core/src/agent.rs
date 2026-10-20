@@ -669,7 +669,7 @@ pub fn pi_latest_session_id(home: &Path, cwd: &Path) -> Option<String> {
         if id.is_empty() {
             continue;
         }
-        if best.as_ref().is_none_or(|(s, _)| stamp > s) {
+        if best.as_ref().is_none_or(|(s, _)| stamp > s.as_str()) {
             best = Some((stamp.to_string(), id.to_string()));
         }
     }

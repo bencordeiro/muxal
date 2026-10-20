@@ -269,7 +269,24 @@ As of **v0.5.4** (tag `d1a01a4`, published and promoted):
   include Added, Fixed, Development, and the full comparison link.
 - **Local main:** promoted using `scripts/promote.sh`; the installed binary
   reports v0.5.4. The user's running main still needs their own restart to switch;
-  never restart or kill it yourself. No feature work is currently in progress.
+  never restart or kill it yourself. Spider, including Phase 2, is ready
+  for user review on `dev/spider-map`. Promotion has not been approved.
+- **Upcoming work — fully remove the built-in web browser (decided 2026-10-18):**
+  the user has decided to retire it entirely. It does not fit the intended
+  workflow, adds clutter and confusion, and can accidentally route users into a
+  browser they did not choose. Users should bring their own browser and search
+  engine; deliberate URL-opening actions should use the system default browser.
+  This is a recorded product decision and upcoming cleanup, not implemented yet.
+  Remove browser panes/presets, settings, commands, embedded-page controls,
+  internal URL routing and preview entry points, native webview backends/helper
+  processes, and browser-only assets/dependencies. Provide backwards-compatible
+  migration for saved browser panes, presets, and settings so existing workspaces
+  still load without losing unrelated work. Audit packaging/CI dependencies,
+  licensing notices, and documentation, including the hand-maintained `.deb`
+  dependency list. The filesystem **file browser** remains; this decision concerns
+  web browsing. Preserve `ios/` as its historical snapshot. Do not expand or
+  re-propose the built-in web browser; use the normal dev gates and user approval
+  before promoting its eventual removal.
 - **Passed on / parked — do not re-propose without being asked:** the tmux
   survival layer (tmux isn't even installed on this machine; the user isn't
   interested), layout presets, cursor-flicker work, startup-delay audit, and
@@ -293,8 +310,73 @@ As of **v0.5.4** (tag `d1a01a4`, published and promoted):
   their exact test request; all 548 Rust tests, real Pi input verification, and
   sandbox launch gates passed. **Future changes still require explicit user
   approval before promotion.**
-- **Next feature direction:** the user wants the Spider map soon, but explicitly
-  after v0.5.4, outside this release. Do not start it until asked.
+- **Next feature direction:** the user authorized implementation of the agreed
+  Spider map after v0.5.4. The proposal and open decisions live in
+  `docs/spider-map-plan.md`. The user confirmed a normal resizable/tabbed pane
+  beside agents, with compact map controls and both layout/overlay choices added
+  gradually. Spider must be opt-in in Settings and **disabled by default**;
+  disabling stops its background work and preserves existing tabs as placeholders.
+  The initial live sandbox render received positive preliminary feedback. The
+  full gate passes (595 Rust tests, plus the previously run manual observer benchmark),
+  extract-only i18n is current (659 English keys), and the
+  isolated-HOME launch smoke passed. A restored disabled tab launched no scans;
+  the enabled native map scanned this repository in about 0.3 seconds. The
+  100,000-file pure-model fixture completed in about 0.8 seconds with 53 MiB peak
+  RSS and at most 300 visible nodes. Final human review is pending for compact
+  readability, controls/navigation, settings disable/re-enable, and pane/window
+  operations. **Phase 2 is implemented in dev:** independent default-off Recent
+  activity (25-second cyan glow) and Code connections (Rust module/import links,
+  local Cargo dependencies/re-exports, optional indirect paths up to three hops).
+  Related paths are revealed within the existing visible-node budget; Inspect
+  supplies exact incoming/outgoing paths and coverage limitations. This uses
+  the existing syntax parser, without compiler/LSP processes or agent hooks.
+  Native events are shared per visible checkout (at most four); the activity
+  observer reads zero source contents, never polls the checkout, and observation
+  stops when overlays are off or no map is visible. Bounded event queues retain
+  only one latest graph. Atomic saves do not invent new permanent paths; source
+  edits update links without rescanning. With Recent activity visible/enabled,
+  detected additions, renames, and removals now trigger coalesced background
+  inventory refreshes (one-second quiet time, five-second burst deferral, minimum
+  five seconds between scan starts). Changes during a scan stay pending; failure
+  requires manual retry; hiding/disabling the final activity consumer cancels
+  automatic work. Camera, expansions, and glow ages survive refresh. The header
+  checkout label now returns to the root overview independently of View; Back
+  restores the previous view. Native sandbox checks confirmed automatic create,
+  rename, and removal refreshes, a regular save without an inventory scan, and
+  the header button working with View closed. Metrics otherwise use manual
+  Refresh. Measured
+  observer startup on this repository: about 20 ms for activity only; about
+  281 ms for connections, 74 source/manifest reads, 68 Rust files and 136 links.
+  Agent checks confirmed the visible glow/fade, direct/indirect inspector links,
+  and observer shutdown when toggles are off or the shell is maximized. Final
+  visual acceptance remains the user's. File activity never identifies an
+  agent; attribution remains optional only if reliable and inexpensive. Keep
+  these resource limits and honest labels. Do not promote without explicit approval.
+  Human review clarified **expansion first**: double-click/Enter/Space opens or
+  closes a branch within the wider map while readable, previewing immediate
+  child folders. Crowding is decided by fitted node/label geometry and the pane's
+  node budget, not total repository size or depth alone. Only crowded expansion
+  focuses a subtree; double-clicking its center or using Back/Backspace restores
+  the previous expansion and camera. History is bounded to 32 views and survives
+  detach/re-dock; resize/live activity never changes focus automatically. The
+  recent-file halo now appears on the actual visible changed file, otherwise
+  only its nearest visible containing folder. The project root never receives
+  this activity halo; navigating does not restart its 25-second clock. Projection
+  is cached, so pan/hover does not rescan activity paths. Native sample checks
+  confirmed successive nested expansions preserving the whole small project,
+  double-click collapse, file/folder glow transfer, and a quiet root. Final human
+  review should judge the crowding cutoff in the user's preferred pane sizes.
+  Follow-up fixed small-folder focus in broad checkouts: expansion now compares
+  label suppression with the previous view, so unrelated existing label crowding
+  does not force `.cargo` into focus. Node collisions, clipping, and node budgets
+  remain hard limits. Regression coverage opens `.cargo` and `.github` in both
+  orders at three pane sizes, checks collapse, and preserves crowded-branch focus.
+  View hides its redundant single-choice Checkout row; worktree selection and
+  missing-checkout recovery retain it. The review sandbox is **Spider — folder
+  expansion fixes**; prior running windows retain their older builds. The user
+  approved committing and pushing the current Spider checkpoint on its dev
+  branch; additional user-requested work remains before any release. No version
+  bump, release tag, merge to master, or promotion is authorized by that approval.
 - Cross-pane scrollback search is also declined; don't re-propose it unasked.
 - Backlog lives in `IDEAS.md` (spider map `sketched`, worktree board,
   day timeline, cost meter, …).

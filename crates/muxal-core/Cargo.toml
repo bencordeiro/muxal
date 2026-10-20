@@ -14,6 +14,11 @@ uuid.workspace = true
 # PowerShell's `-EncodedCommand` takes UTF-16LE base64. Already in the tree via
 # muxal-terminal, so this adds a dependency edge, not a new crate.
 base64 = "0.22"
+# Reuse the syntax parser/grammar already shipped by the editor. No compiler or
+# language-server process is needed for Spider's bounded Rust import overlay.
+tree-sitter = "0.26"
+tree-sitter-rust = "0.24.2"
+toml = "0.8"
 
 [dev-dependencies]
 serde_json.workspace = true

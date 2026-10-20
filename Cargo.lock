@@ -4659,6 +4659,7 @@ dependencies = [
  "muxal-store",
  "muxal-terminal",
  "muxal-tray",
+ "notify",
  "notify-rust",
  "rust-embed",
  "serde_json",
@@ -4678,6 +4679,9 @@ dependencies = [
  "base64 0.22.1",
  "serde",
  "serde_json",
+ "toml 0.8.23",
+ "tree-sitter",
+ "tree-sitter-rust",
  "uuid",
 ]
 

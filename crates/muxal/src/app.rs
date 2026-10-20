@@ -4,6 +4,7 @@
 //! `terminals`, keyed by instance id.
 
 mod handoffs;
+mod spider;
 
 use crate::editor::{
     DiskChange, DiskStamp, EditorConfig, EditorView, ExternalChange, read_disk_change,
@@ -2224,6 +2225,8 @@ pub struct MuxalApp {
     /// File-browser (second sidebar) state.
     show_file_browser: bool,
     file_browser_pid: Option<Uuid>,
+    file_browser_root_override: Option<(Uuid, PathBuf)>,
+    file_browser_generation: Uuid,
     file_browser_files: Vec<PathBuf>,
     file_browser_expanded: HashSet<PathBuf>,
     file_browser_input: Entity<InputState>,
@@ -2444,6 +2447,7 @@ pub struct MuxalApp {
     /// The runner whose run-dialog is open (index into `runners`).
     active_runner: Option<usize>,
     handoff_ui: handoffs::HandoffUi,
+    spider_ui: spider::SpiderUi,
     /// Whether the run-dialog (collect details) is shown.
     show_run_dialog: bool,
     /// Detail-text editor for the run-dialog (main window).
@@ -2518,6 +2522,7 @@ enum PaletteCommand {
     RunRunner(usize),
     SendSnippet(usize),
     Handoff,
+    Spider,
 }
 
 /// The live view backing a pane — a terminal, a code editor, or a browser. Lets
@@ -2527,6 +2532,7 @@ enum PaneView {
     Terminal(Entity<TerminalView>),
     Editor(Entity<EditorView>),
     Browser(Entity<crate::browser::BrowserView>),
+    Spider(Entity<crate::spider::SpiderView>),
 }
 
 impl PaneView {
@@ -2535,6 +2541,7 @@ impl PaneView {
             PaneView::Terminal(v) => v.read(cx).focus_handle(cx),
             PaneView::Editor(v) => v.read(cx).focus_handle(cx),
             PaneView::Browser(v) => v.read(cx).focus_handle(cx),
+            PaneView::Spider(v) => v.read(cx).focus_handle(cx),
         }
     }
 }
@@ -2601,6 +2608,7 @@ enum PopoutContent {
     /// Just the URL: the native webview child belongs to the window that built
     /// it, so the pane is re-created in its new window rather than moved.
     Browser(String),
+    Spider(crate::spider::State),
 }
 
 /// A pane popped out into its own window. Closing the window terminates the
@@ -2735,6 +2743,7 @@ impl PopoutView {
                 .detach(),
             PaneView::Editor(v) => cx.observe(v, |_, _, cx| cx.notify()).detach(),
             PaneView::Browser(v) => cx.observe(v, |_, _, cx| cx.notify()).detach(),
+            PaneView::Spider(v) => cx.observe(v, |_, _, cx| cx.notify()).detach(),
         }
         Self {
             view,
@@ -2757,6 +2766,7 @@ impl PopoutView {
                 .into(),
             PaneView::Editor(v) => v.read(cx).title().into(),
             PaneView::Browser(v) => v.read(cx).tab_title().into(),
+            PaneView::Spider(_) => t("Spider"),
         }
     }
 
@@ -2765,6 +2775,7 @@ impl PopoutView {
             PaneView::Terminal(v) => terminal_pane_element(v, false, cx),
             PaneView::Editor(v) => v.clone().into_any_element(),
             PaneView::Browser(v) => v.clone().into_any_element(),
+            PaneView::Spider(v) => v.clone().into_any_element(),
         }
     }
 
@@ -2775,6 +2786,7 @@ impl PopoutView {
             PaneView::Terminal(_) => ("Close terminal?", "This terminal will be terminated."),
             PaneView::Editor(_) => ("Close editor?", "Unsaved changes will be lost."),
             PaneView::Browser(_) => ("Close browser?", "This browser pane will be closed."),
+            PaneView::Spider(_) => ("Close Spider?", "This map pane will be closed."),
         }
     }
 }
@@ -4208,6 +4220,8 @@ impl MuxalApp {
             fullscreen_sidebar_revealed: false,
             show_file_browser: false,
             file_browser_pid: None,
+            file_browser_root_override: None,
+            file_browser_generation: Uuid::new_v4(),
             file_browser_files: Vec::new(),
             file_browser_expanded: HashSet::new(),
             file_browser_input,
@@ -4286,6 +4300,7 @@ impl MuxalApp {
             snippets_menu: None,
             active_runner: None,
             handoff_ui: handoffs::HandoffUi::new(window, cx),
+            spider_ui: spider::SpiderUi::default(),
             show_run_dialog: false,
             runner_input,
             notifications_enabled: settings.notifications_enabled,
@@ -4788,6 +4803,13 @@ impl MuxalApp {
 
     /// Spawn (or replace) the live terminal for an instance id.
     fn spawn_terminal(&mut self, instance_id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .workspace
+            .instance(instance_id)
+            .is_none_or(|i| i.kind != InstanceKind::Terminal)
+        {
+            return;
+        }
         let _phase = ui_profile::phase("activation", "spawn-terminal-immediate", Some(instance_id));
         // An explicit/immediate spawn supersedes a deferred launch still creating
         // its PTY. Its token will fail validation and dropping it kills the child.
@@ -4959,6 +4981,13 @@ impl MuxalApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self
+            .workspace
+            .instance(instance_id)
+            .is_none_or(|i| i.kind != InstanceKind::Terminal)
+        {
+            return;
+        }
         let Some(token) = self.reserve_terminal_spawn(instance_id, window, cx) else {
             return;
         };
@@ -5434,6 +5463,7 @@ impl MuxalApp {
             return;
         };
         match kind {
+            InstanceKind::Spider => self.spawn_spider(iid, window, cx),
             InstanceKind::Terminal => {
                 // A totally-failed launch (fallback shell included) shows an
                 // error pane; don't respawn/re-notify on every project
@@ -5586,6 +5616,8 @@ impl MuxalApp {
         }
         self.pending_editor_redock.clear();
         self.pending_browser_redock.clear();
+        self.spider_ui = spider::SpiderUi::default();
+        self.file_browser_root_override = None;
         // Drop the native webviews with their workspace. Left alive, they keep
         // instance ids the new workspace will reuse, and the orphaned WebView2
         // children outlive the panes they belonged to.
@@ -5993,6 +6025,8 @@ impl MuxalApp {
             // own chords too. Selecting a browser pane with a keyboard shortcut must
             // leave those working — only a click *into the page* should hand the
             // keyboard over (see the click handler in the tick).
+        } else if let Some(view) = self.spider_ui.views.get(&iid) {
+            window.focus(&view.read(cx).focus_handle(cx), cx);
         } else {
             // Deferred activation has selected the pane but has not created its
             // window-bound view yet. Neutral focus records the intent without
@@ -7030,6 +7064,7 @@ impl MuxalApp {
         self.sync_claude_session_ids(cx);
         self.sync_pi_session_ids(cx);
         self.poll_handoffs(cx);
+        self.sync_spiders(cx);
         self.sync_grok_session_ids(cx);
         let focused = self.active_instance;
         // A `--resume` launch has this long to prove its saved session is valid;
@@ -8178,6 +8213,7 @@ impl MuxalApp {
         // Build the right live view for the pane's kind (mirrors the restore
         // dispatch in `spawn_project_terminals_now`).
         match kind {
+            InstanceKind::Spider => self.spawn_spider(iid, window, cx),
             InstanceKind::Browser => {
                 let url = browser_url.unwrap_or_else(|| "about:blank".to_string());
                 let view = cx.new(|cx| crate::browser::BrowserView::new(iid, pid, url, window, cx));
@@ -8700,6 +8736,10 @@ impl MuxalApp {
             || self.show_terms
             || self.show_workspace_selector
             || self.handoff_ui.is_open()
+            || self
+                .active_instance
+                .and_then(|id| self.spider_view(id))
+                .is_some_and(|view| view.read(cx).menu_open())
             || self.show_run_dialog
             || self.broadcasting
             || self.git_modal.is_some()
@@ -9201,6 +9241,9 @@ impl MuxalApp {
         // Only meaningful with an active project to open the memory for.
         if self.workspace.active_project.is_some() {
             cmds.push(OpenMemory);
+            if self.settings.spider_enabled {
+                cmds.push(Spider);
+            }
         }
         if self
             .active_instance
@@ -9222,6 +9265,7 @@ impl MuxalApp {
 
     fn palette_command_label(&self, cmd: PaletteCommand) -> String {
         match cmd {
+            PaletteCommand::Spider => t("New Spider map pane").into(),
             PaletteCommand::Handoff => t("Agent handoff…").into(),
             PaletteCommand::SplitRight => t("Split pane right").into(),
             PaletteCommand::SplitDown => t("Split pane down").into(),
@@ -9255,6 +9299,12 @@ impl MuxalApp {
         cx: &mut Context<Self>,
     ) {
         match cmd {
+            PaletteCommand::Spider => self.open_spider(
+                self.active_instance,
+                PlacementMode::Split(SplitDirection::Horizontal),
+                window,
+                cx,
+            ),
             PaletteCommand::Handoff => {
                 if let Some(iid) = self.active_instance {
                     self.open_handoff(iid, window, cx);
@@ -9694,6 +9744,14 @@ impl MuxalApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self
+            .workspace
+            .instance(iid)
+            .is_some_and(|i| i.kind == InstanceKind::Spider)
+        {
+            self.open_spider(Some(iid), placement, window, cx);
+            return;
+        }
         let preset = self
             .preset_index_for_instance(iid)
             .unwrap_or(self.current_preset);
@@ -9792,6 +9850,9 @@ impl MuxalApp {
         }
         // Editors just drop (their buffer is in memory); nothing to kill.
         self.editors.remove(&iid);
+        self.spider_ui.views.remove(&iid);
+        self.spider_ui.redocks.retain(|(id, _, _)| *id != iid);
+        self.prune_spider_scans(cx);
         // Dropping a BrowserView hides its native webview (gpui-wry Drop impl).
         self.browsers.remove(&iid);
 
@@ -11063,6 +11124,18 @@ impl MuxalApp {
             return;
         }
         // Snapshot this project's editors; they're rebuilt inside the new window.
+        for iid in self
+            .workspace
+            .project(pid)
+            .map(|p| p.instances())
+            .unwrap_or_default()
+        {
+            if let Some(view) = self.spider_ui.views.remove(&iid) {
+                self.spider_ui
+                    .redocks
+                    .push((iid, view.read(cx).capture(), None));
+            }
+        }
         let editor_snaps: Vec<(Uuid, EditorSnapshot)> = self
             .workspace
             .project(pid)
@@ -11232,6 +11305,11 @@ impl MuxalApp {
             .map(|p| p.instances())
             .unwrap_or_default()
         {
+            if let Some(view) = self.spider_ui.views.remove(&iid) {
+                self.spider_ui
+                    .redocks
+                    .push((iid, view.read(cx).capture(), None));
+            }
             if let Some(ed) = self.editors.remove(&iid) {
                 let snap = EditorSnapshot::capture(&ed, cx);
                 self.pending_editor_rebuild.push((iid, snap));
@@ -11291,6 +11369,11 @@ impl MuxalApp {
             .map(|p| p.instances())
             .unwrap_or_default()
         {
+            if let Some(view) = self.spider_ui.views.remove(&iid) {
+                self.spider_ui
+                    .redocks
+                    .push((iid, view.read(cx).capture(), None));
+            }
             if let Some(ed) = self.editors.remove(&iid) {
                 let snap = EditorSnapshot::capture(&ed, cx);
                 self.pending_editor_rebuild.push((iid, snap));
@@ -11492,6 +11575,8 @@ impl MuxalApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        self.rebuild_spiders(window, cx);
+        self.sync_spider_visibility(cx);
         let layout = self.workspace.project(pid).and_then(|p| p.layout.clone());
         let maximized_here = self.maximized.and_then(|max| {
             self.workspace
@@ -11627,6 +11712,8 @@ impl MuxalApp {
             PopoutContent::Editor(EditorSnapshot::capture(&ed, cx))
         } else if let Some(bv) = self.browsers.remove(&iid) {
             PopoutContent::Browser(bv.read(cx).url().to_string())
+        } else if let Some(view) = self.spider_ui.views.remove(&iid) {
+            PopoutContent::Spider(view.read(cx).capture())
         } else {
             self.redock_into_layout(iid, pid, redock, cx);
             return;
@@ -11667,6 +11754,7 @@ impl MuxalApp {
                     PopoutContent::Terminal(v) => PopoutContent::Terminal(v.clone()),
                     PopoutContent::Editor(s) => PopoutContent::Editor(s.clone()),
                     PopoutContent::Browser(u) => PopoutContent::Browser(u.clone()),
+                    PopoutContent::Spider(state) => PopoutContent::Spider(state.clone()),
                 };
                 move |window, cx| {
                     ui_profile::register_profile_window(
@@ -11677,6 +11765,9 @@ impl MuxalApp {
                     let pane =
                         match content {
                             PopoutContent::Terminal(view) => PaneView::Terminal(view),
+                            PopoutContent::Spider(state) => PaneView::Spider(
+                                cx.new(|cx| crate::spider::SpiderView::new(state, window, cx)),
+                            ),
                             PopoutContent::Editor(snap) => {
                                 PaneView::Editor(snap.build(config, window, cx))
                             }
@@ -11711,6 +11802,15 @@ impl MuxalApp {
                         },
                     );
                 }
+                if let Some(view) = self.spider_view(iid) {
+                    let app = cx.weak_entity();
+                    cx.defer(move |cx| {
+                        let _ = handle.update(cx, |_, window, cx| {
+                            let _ =
+                                app.update(cx, |app, cx| app.attach_spider(iid, &view, window, cx));
+                        });
+                    });
+                }
                 self.persist();
                 cx.notify();
             }
@@ -11724,6 +11824,11 @@ impl MuxalApp {
                     PopoutContent::Editor(snap) => {
                         let ed = snap.build(config, window, cx);
                         self.editors.insert(iid, ed);
+                    }
+                    PopoutContent::Spider(state) => {
+                        let view = cx.new(|cx| crate::spider::SpiderView::new(state, window, cx));
+                        self.attach_spider(iid, &view, window, cx);
+                        self.spider_ui.views.insert(iid, view);
                     }
                     PopoutContent::Browser(url) => {
                         let bv = cx
@@ -11755,6 +11860,12 @@ impl MuxalApp {
                 // bound to the window where the InputState is built).
                 let snap = EditorSnapshot::capture(&ed, cx);
                 self.pending_editor_redock.push((iid, snap, popout.redock));
+                cx.notify();
+            }
+            PaneView::Spider(view) => {
+                self.spider_ui
+                    .redocks
+                    .push((iid, view.read(cx).capture(), Some(popout.redock)));
                 cx.notify();
             }
             PaneView::Browser(bv) => {
@@ -11839,6 +11950,7 @@ impl MuxalApp {
             )
         });
         self.workspace.remove_instance_meta(iid);
+        self.prune_spider_scans(cx);
         if let Some((local_session, worktree_path, worktree_id, project_id)) = info {
             // Popout window closed deliberately → kill the remote session too.
             self.teardown_closed_instance(
@@ -11929,7 +12041,7 @@ impl MuxalApp {
             InstanceKind::Editor => self.settings.confirm_close_editor,
             InstanceKind::Diff => self.settings.confirm_close_diff,
             // Browsers are cheap to reopen (the URL is persisted anyway).
-            InstanceKind::Browser => false,
+            InstanceKind::Browser | InstanceKind::Spider => false,
         }
     }
 
@@ -11970,6 +12082,7 @@ impl MuxalApp {
                 InstanceKind::Terminal => (t("terminal"), t("terminated")),
                 InstanceKind::Editor => (t("editor"), t("closed")),
                 InstanceKind::Diff | InstanceKind::Browser => (t("diff"), t("closed")),
+                InstanceKind::Spider => (t("Spider"), t("closed")),
             };
             let name = self
                 .workspace
@@ -12182,6 +12295,9 @@ impl MuxalApp {
             return;
         };
         let pid = inst.project_id;
+        if inst.kind == InstanceKind::Spider && !self.settings.spider_enabled {
+            return;
+        }
         inst.id = Uuid::new_v4();
         inst.tmux_session = None;
         inst.pinned = false; // a duplicate starts unpinned
@@ -12219,7 +12335,7 @@ impl MuxalApp {
             return;
         }
         self.workspace.add_instance(inst);
-        self.spawn_terminal(new_iid, window, cx);
+        self.spawn_project_pane(new_iid, window, cx);
         self.focus_instance(new_iid, window, cx);
         self.persist();
         cx.notify();
@@ -13522,6 +13638,11 @@ impl MuxalApp {
 
     /// The directory the file browser lists for a project (its local root).
     fn browser_root(&self, pid: Uuid) -> PathBuf {
+        if let Some((project, root)) = &self.file_browser_root_override
+            && *project == pid
+        {
+            return root.clone();
+        }
         self.workspace
             .project(pid)
             .map(|p| p.root_path.clone())
@@ -13538,6 +13659,7 @@ impl MuxalApp {
             return;
         }
         self.show_file_browser = true;
+        self.file_browser_root_override = None;
         self.show_memory = false; // the two docked panels share the slot
         // `select_project` re-points the open browser at `pid` (see its tail).
         self.select_project(pid, window, cx);
@@ -13552,13 +13674,15 @@ impl MuxalApp {
             self.file_browser_expanded.clear();
         }
         self.file_browser_pid = Some(pid);
+        self.file_browser_generation = Uuid::new_v4();
+        let generation = self.file_browser_generation;
         self.file_browser_files = Vec::new();
         self.file_browser_rows = Arc::new(Vec::new());
         self.file_browser_status = Arc::new(HashMap::new());
         let root = self.browser_root(pid);
         // Remote projects list over SSH (`git ls-files`/`find`); local walk otherwise.
         // The repo the rows live in, for their git marks.
-        let git_loc = self.repo_loc(pid);
+        let git_loc = Some(integrations::RepoLoc::new(root.clone()));
         let status_root = root.clone();
         cx.spawn(async move |this: WeakEntity<Self>, cx| {
             let files: Vec<PathBuf> = cx
@@ -13566,7 +13690,8 @@ impl MuxalApp {
                 .spawn(async move { list_project_files(&root) })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                if this.file_browser_pid == Some(pid) {
+                if this.file_browser_pid == Some(pid) && this.file_browser_generation == generation
+                {
                     this.file_browser_files = files;
                     this.rebuild_file_browser_rows(cx);
                     cx.notify();
@@ -13587,7 +13712,8 @@ impl MuxalApp {
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                if this.file_browser_pid == Some(pid) {
+                if this.file_browser_pid == Some(pid) && this.file_browser_generation == generation
+                {
                     this.file_browser_status = Arc::new(status);
                     cx.notify();
                 }
@@ -13603,17 +13729,14 @@ impl MuxalApp {
         let Some(pid) = self.file_browser_pid else {
             return;
         };
-        let Some(loc) = self.repo_loc(pid) else {
-            return;
-        };
         let root = self.browser_root(pid);
+        let loc = integrations::RepoLoc::new(root.clone());
         // git wants a path relative to the repo root — and a remote project's rows are
         // paths on the *host*, which would never resolve here anyway.
-        let rel = abs
-            .strip_prefix(&root)
-            .unwrap_or(&abs)
-            .to_string_lossy()
-            .to_string();
+        let Ok(relative) = abs.strip_prefix(&root) else {
+            return;
+        };
+        let rel = relative.to_string_lossy().to_string();
         let name = abs
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -13677,6 +13800,16 @@ impl MuxalApp {
         };
         let mut instance = Instance::from_preset(pid, &AgentPreset::shell());
         // command_for uses worktree_path as the cwd (no worktree_id = plain cwd).
+        if let Some(worktree) = self
+            .workspace
+            .worktrees
+            .iter()
+            .find(|w| w.project_id == pid && dir.starts_with(&w.path))
+        {
+            instance.worktree_id = Some(worktree.id);
+            instance.worktree_branch = Some(worktree.branch.clone());
+            instance.use_worktree = true;
+        }
         instance.worktree_path = Some(dir);
         let target = self.active_instance;
         self.place_and_spawn(
@@ -13684,7 +13817,7 @@ impl MuxalApp {
             instance,
             PlacementMode::Split(SplitDirection::Horizontal),
             target,
-            None,
+            Some(WorktreeChoice::None),
             window,
             cx,
         );
@@ -13715,11 +13848,14 @@ impl MuxalApp {
         let muted = cx.theme().muted_foreground;
         let hover_bg = cx.theme().sidebar_accent.opacity(0.5);
         let radius = cx.theme().radius;
-        let root = self
+        let root = self.browser_root(pid);
+        let proj_name = self
             .workspace
-            .project(pid)
-            .map(|p| p.root_path.clone())
-            .unwrap_or_default();
+            .worktrees
+            .iter()
+            .find(|w| w.project_id == pid && w.path == root)
+            .map(|w| format!("{proj_name} · {}", w.name))
+            .unwrap_or(proj_name);
         let renaming = match &self.rename {
             Some(RenameTarget::File(p)) => Some(p.clone()),
             _ => None,
@@ -14307,6 +14443,16 @@ impl MuxalApp {
                         )
                         .child(bv.clone())
                         .into_any_element()
+                } else if let Some(view) = self.spider_ui.views.get(&iid) {
+                    div()
+                        .size_full()
+                        .capture_any_mouse_down(cx.listener(move |this, _, window, cx| {
+                            if this.active_instance != Some(iid) {
+                                this.focus_instance(iid, window, cx);
+                            }
+                        }))
+                        .child(view.clone())
+                        .into_any_element()
                 } else if let Some(err) = self.failed_launches.get(&iid) {
                     // The launch failed completely (fallback shell included):
                     // show the error in place; the toolbar Restart retries.
@@ -14398,7 +14544,7 @@ impl MuxalApp {
                             .ghost()
                             .with_size(sz)
                             .icon(IconName::PanelRight)
-                            .tooltip(t("Split right; right-click to choose agent"))
+                            .tooltip(t("Split right; right-click to choose a pane"))
                             .on_click(cx.listener(move |this, _e, window, cx| {
                                 this.place_like_instance(
                                     iid,
@@ -14425,7 +14571,7 @@ impl MuxalApp {
                             .ghost()
                             .with_size(sz)
                             .icon(IconName::PanelBottom)
-                            .tooltip(t("Split down; right-click to choose agent"))
+                            .tooltip(t("Split down; right-click to choose a pane"))
                             .on_click(cx.listener(move |this, _e, window, cx| {
                                 this.place_like_instance(
                                     iid,
@@ -14890,11 +15036,26 @@ impl MuxalApp {
                                         )
                                 }
                             })
-                            .child(agent_icon(
-                                tab_program.as_deref(),
-                                px(12.0 * su),
-                                cx.theme().muted_foreground,
-                            ))
+                            .child(
+                                if self
+                                    .workspace
+                                    .instance(tab)
+                                    .is_some_and(|i| i.kind == InstanceKind::Spider)
+                                {
+                                    svg()
+                                        .path("icons/spider.svg")
+                                        .size(px(12.0 * su))
+                                        .text_color(cx.theme().muted_foreground)
+                                        .into_any_element()
+                                } else {
+                                    agent_icon(
+                                        tab_program.as_deref(),
+                                        px(12.0 * su),
+                                        cx.theme().muted_foreground,
+                                    )
+                                    .into_any_element()
+                                },
+                            )
                             // A tab in a worktree always shows its color dot.
                             .children(tab_wt_colors[i].map(|c| {
                                 div()
@@ -14980,7 +15141,7 @@ impl MuxalApp {
                             .ghost()
                             .with_size(sz)
                             .icon(IconName::Plus)
-                            .tooltip(t("New tab agent"))
+                            .tooltip(t("New tab"))
                             .on_click(cx.listener(move |this, _e, window, cx| {
                                 this.open_place_menu(
                                     anchor,
@@ -16648,6 +16809,7 @@ impl MuxalApp {
                     .drag_over::<DragProject>(move |s, _, _, _| s.bg(drop_hl))
                     .context_menu({
                         let entity = entity.clone();
+                        let spider_enabled = self.settings.spider_enabled;
                         move |menu, window, cx| {
                             let mut menu = menu
                                 .item(
@@ -16793,6 +16955,18 @@ impl MuxalApp {
                                             &entity,
                                             move |this, _, window, cx| {
                                                 this.launch_project_startup(pid, window, cx)
+                                            },
+                                        )),
+                                );
+                            }
+                            if spider_enabled {
+                                menu = menu.item(
+                                    PopupMenuItem::new(t("New Spider map pane"))
+                                        .icon(Icon::empty().path("icons/spider.svg"))
+                                        .on_click(window.listener_for(
+                                            &entity,
+                                            move |this, _, window, cx| {
+                                                this.open_project_spider(pid, window, cx)
                                             },
                                         )),
                                 );
@@ -17088,18 +17262,27 @@ impl MuxalApp {
                         } else {
                             cx.theme().sidebar
                         })
-                        .child(agent_icon(
-                            program.as_deref(),
-                            px(15.0),
-                            status_hsla(
-                                if loading {
-                                    AgentStatus::Working
-                                } else {
-                                    status
-                                },
-                                cx,
-                            ),
-                        ))
+                        .child(if inst.is_some_and(|i| i.kind == InstanceKind::Spider) {
+                            svg()
+                                .path("icons/spider.svg")
+                                .size(px(15.0))
+                                .text_color(cx.theme().muted_foreground)
+                                .into_any_element()
+                        } else {
+                            agent_icon(
+                                program.as_deref(),
+                                px(15.0),
+                                status_hsla(
+                                    if loading {
+                                        AgentStatus::Working
+                                    } else {
+                                        status
+                                    },
+                                    cx,
+                                ),
+                            )
+                            .into_any_element()
+                        })
                         // Worktree dot (matches the pane outline color).
                         .children(
                             self.instance_worktree_color(iid)
@@ -17151,21 +17334,27 @@ impl MuxalApp {
                                     .text_color(cx.theme().sidebar_foreground)
                                     .child(display),
                             )
-                            .child(div().flex_none().child(if loading {
-                                status_tag(AgentStatus::Working, t("loading").to_string())
-                            } else {
-                                status_tag(
-                                    status,
-                                    inst.map(|instance| {
-                                        localized_activity_label(
+                            .children(inst.is_none_or(|i| i.kind != InstanceKind::Spider).then(
+                                || {
+                                    div().flex_none().child(if loading {
+                                        status_tag(AgentStatus::Working, t("loading").to_string())
+                                    } else {
+                                        status_tag(
                                             status,
-                                            &instance.activity,
-                                            chrono::Utc::now().timestamp_millis(),
+                                            inst.map(|instance| {
+                                                localized_activity_label(
+                                                    status,
+                                                    &instance.activity,
+                                                    chrono::Utc::now().timestamp_millis(),
+                                                )
+                                            })
+                                            .unwrap_or_else(|| {
+                                                status_label(Some(status)).to_string()
+                                            }),
                                         )
                                     })
-                                    .unwrap_or_else(|| status_label(Some(status)).to_string()),
-                                )
-                            }))
+                                },
+                            ))
                             .on_drag(DragInstance { iid }, move |_, offset, _, cx| {
                                 let label = ghost_label.clone();
                                 cx.new(move |_| DragGhost { label, offset })
@@ -18067,6 +18256,7 @@ impl MuxalApp {
             self.apply_keybindings(cx);
             self.persist_settings();
         }
+        self.sync_spiders(cx);
         self.close_settings(cx);
     }
 
@@ -19098,8 +19288,8 @@ impl MuxalApp {
             return div().into_any_element();
         };
         let heading = match placement {
-            PlacementMode::Tab => t("New tab agent"),
-            PlacementMode::Split(_) => t("New pane agent"),
+            PlacementMode::Tab => t("New tab"),
+            PlacementMode::Split(_) => t("New pane"),
         };
         let mut list = v_flex().gap_px().w_full();
         for (idx, preset) in self.presets.iter().enumerate() {
@@ -19126,6 +19316,23 @@ impl MuxalApp {
                     }))
                     .child(icon)
                     .child(div().text_sm().child(name)),
+            );
+        }
+        if self.settings.spider_enabled {
+            list = list.child(
+                div()
+                    .id("place-spider")
+                    .px_2()
+                    .py_1()
+                    .text_sm()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(cx.theme().accent))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if let Some((anchor, placement, _)) = this.place_menu.take() {
+                            this.open_spider(Some(anchor), placement, window, cx);
+                        }
+                    }))
+                    .child(t("Spider map")),
             );
         }
         // Full-window catcher dismisses on an outside click; the dropdown itself
@@ -20779,6 +20986,13 @@ impl MuxalApp {
                 ),
             )
             .child(self.check_row(
+                Checkbox::new("b-spider").checked(self.settings.spider_enabled)
+                    .on_click(cx.listener(|this, enabled: &bool, _, cx| {
+                        this.settings.spider_enabled = *enabled; this.sync_spiders(cx); this.persist_settings(); cx.notify();
+                    })),
+                &t("Enable Spider map (project visualization panes)"),
+            ))
+            .child(self.check_row(
                 Checkbox::new("b-handoffs")
                     .checked(self.settings.handoffs_enabled)
                     .on_click(cx.listener(|this, c: &bool, _w, cx| {
@@ -22070,6 +22284,8 @@ impl Render for MuxalApp {
         // Rebuild any editors/browsers awaiting re-dock (needs the main window).
         self.drain_editor_redocks(window, cx);
         self.drain_browser_redocks(window, cx);
+        self.rebuild_spiders(window, cx);
+        self.sync_spider_visibility(cx);
 
         // The title bar shows the active *workspace* name (next to "muxal"), not
         // the highlighted project.
