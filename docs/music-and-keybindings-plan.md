@@ -89,14 +89,17 @@ Terminal passthrough ▸
 ```text
 │ … project and agent list …       │
 │                                 │
-│  Evening rain…       [▶/Ⅱ] [⏭]   │
+│  Evening rain… [⏮] [▶/Ⅱ] [⏭] [↻1] │
 │  + New Project                  │
 ```
 
 - A small fixed footer keeps controls reachable while the project list scrolls.
   The filename stem supplies a single truncated title with the full name on
   hover. Reuse theme text/accent colors and normal icon sizes.
-- Only two playback buttons: Play/Pause toggles in place; Skip advances.
+- Play/Pause toggles in place; Previous and Next wrap through the folder.
+  The user-requested repeat-current-track toggle is off by default and saved.
+  It affects natural track endings; manual Previous/Next still change tracks.
+  Changing tracks while paused keeps the player paused.
   Buttons use click handlers and keyboard focus, with translated accessible
   labels/tooltips. At the narrowest sidebar width, shorten the title first.
 - With no folder, replace the title with a compact **Choose music folder**
@@ -116,8 +119,8 @@ These choices make the first implementation concrete; they remain reviewable.
 | Source | Choose one existing local folder through the native chooser. Read files in place; create no music directory, copy, project file, or generated playlist. |
 | Discovery | Include supported files in nested folders, in stable relative-path order. Skip hidden children and symlinks; do not follow directory loops or crawl outside the selection. |
 | Initial formats | MP3, FLAC, PCM WAV, and Ogg Vorbis, subject to the playback feasibility checkpoint. State actual supported formats in Settings. |
-| Queue | Advance sequentially and repeat the folder at its end. One-track folders repeat that track. A manually paused queue stays paused when Skip changes selection. |
-| Remember | Save folder, relative last-track path, volume, and opt-ins. Resume the saved track from its beginning; ordinary launch stays paused. Do not persist a full library or audio buffers. |
+| Queue | Advance sequentially and repeat the folder at its end. Previous/Next wrap and keep paused playback paused. The optional repeat-current-track toggle affects natural endings only; manual navigation still changes tracks. |
+| Remember | Save folder, relative last-track path, volume, repeat-current-track, and opt-ins. Resume the saved track from its beginning; ordinary launch stays paused. Do not persist a full library or audio buffers. |
 | Autoplay | Only with both opt-ins enabled, on the first successful project opening of a process, after terms/workspace readiness. Enabling Music or selecting a folder does not itself start playback. |
 | Respect pause | User pause wins for the rest of that process: project switches, focus changes, Settings, and later workspace entries never restart it. Turning autoplay off never starts or resumes audio. |
 | Scope | One player shared by the main window, secondary project windows, and pop-outs in a process. Changing projects/workspaces does not duplicate or restart it. |
@@ -238,7 +241,7 @@ isolated-HOME launch smoke. Only `scripts/dev.sh` launches interactive review.
 - Edit/reset a shortcut, change filters, Apply; repeat with Cancel and confirm the
   original shortcut and agent Ctrl-key passthrough still work.
 - Fresh/disabled Music adds no sidebar row and starts no playback or scanning.
-- Choose music, play/pause/skip, and verify the footer at narrow sidebar widths,
+- Choose music, play/pause, Previous/Next, repeat-track, and verify the footer at narrow sidebar widths,
   larger UI scales, and in both light/dark themes.
 - Switch panes/projects/windows and hide the sidebar: one continuous player.
 - Restart with autoplay off, then test its explicit opt-in; a manual pause wins.
@@ -283,3 +286,11 @@ reviewing this plan; none should be mistaken for a shipped feature.
   installed main remains untouched. The review sandbox is
   `.muxal-dev/music-review`, launched using `scripts/dev.sh`, with a dedicated
   Music & keybindings review workspace and no preconfigured agents.
+
+- Requested follow-up: Previous and repeat-current-track now use the same small
+  footer. Repeat defaults off, persists, and applies immediately without queueing
+  a mode command; Settings Cancel restores it with the other music preferences.
+  Previous wraps and respects pause. Added pure queue/persistence and worker
+  tests for natural-end repeat, turning repeat off, and manual navigation while
+  repeat is on. The follow-up gate passes 617 active tests, strict Clippy, the
+  debug build, current 704-key extraction/check, and isolated-HOME launch smoke.

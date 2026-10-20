@@ -270,12 +270,14 @@ As of **v0.5.5** (tag `3fb4610`, published and promoted; verified 2026-10-20):
   now restores focus on close and rollback reinstalls the saved snapshot.
   Music is fully disabled by default: no worker/scan/device/timer while off.
   Settings → Music chooses an existing folder; sidebar controls above New Project
-  provide Play/Pause and Skip, with volume and refresh in Settings. One player
+  provide Previous, Play/Pause, Next, and repeat-current-track, with volume and
+  refresh in Settings. Previous/Next wrap and keep paused playback paused;
+  repeat affects natural endings only and is saved with a default of off. One player
   serves the process's windows, with bounded discovery and streaming MP3/FLAC/
   PCM WAV/Ogg Vorbis. Separate default-off autoplay starts once on project open;
   manual pause wins over later switches. No activity/focus sensor or automatic
   pause. Disable/quit releases resources. Main/dev processes remain independent.
-  The local Linux gate passes 615 active tests, including generated four-format
+  The local Linux gate passes 617 active tests, including generated four-format
   decode fixtures, bounded failure/queue tests, and silent native ALSA lifecycle.
   The isolated-HOME GUI smoke passes with no music worker/device while disabled.
   Rodio is playback-only with selected codecs; Linux adds ALSA, with t64/old

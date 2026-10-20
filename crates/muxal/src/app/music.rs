@@ -36,6 +36,7 @@ impl MuxalApp {
         }
         if let Some(service) = &self.music.service {
             service.send(Command::Volume(settings.volume));
+            service.set_repeat_track(settings.repeat_track);
             return;
         }
         let generation = Uuid::new_v4();
@@ -210,6 +211,19 @@ impl MuxalApp {
                         .child(title),
                 )
                 .child(
+                    Button::new("music-previous")
+                        .ghost()
+                        .small()
+                        .icon(Icon::empty().path("icons/music-previous.svg"))
+                        .tooltip(t("Previous track"))
+                        .disabled(unavailable || status.count == 0)
+                        .on_click(cx.listener(|this, _, _, _| {
+                            if let Some(service) = &this.music.service {
+                                service.send(Command::Previous);
+                            }
+                        })),
+                )
+                .child(
                     Button::new("music-play")
                         .ghost()
                         .small()
@@ -237,6 +251,22 @@ impl MuxalApp {
                             if let Some(service) = &this.music.service {
                                 service.send(Command::Skip);
                             }
+                        })),
+                )
+                .child(
+                    Button::new("music-repeat")
+                        .ghost()
+                        .small()
+                        .icon(Icon::empty().path("icons/music-repeat.svg"))
+                        .tooltip(t("Repeat current track"))
+                        .selected(self.settings.music.repeat_track)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.settings.music.repeat_track = !this.settings.music.repeat_track;
+                            if let Some(service) = &this.music.service {
+                                service.set_repeat_track(this.settings.music.repeat_track);
+                            }
+                            this.persist_settings();
+                            cx.notify();
                         })),
                 );
         }

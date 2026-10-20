@@ -32,6 +32,7 @@ pub enum Command {
     Play,
     Pause,
     Skip,
+    Previous,
     Volume(u8),
     Stop,
 }
@@ -39,6 +40,7 @@ pub enum Command {
 pub struct Service {
     sender: mpsc::SyncSender<Command>,
     cancelled: Arc<AtomicBool>,
+    repeat_track: Arc<AtomicBool>,
 }
 impl Service {
     pub fn start(
@@ -53,6 +55,8 @@ impl Service {
         let (sender, receiver) = mpsc::sync_channel(32);
         let cancelled = Arc::new(AtomicBool::new(false));
         let stop = cancelled.clone();
+        let repeat_track = Arc::new(AtomicBool::new(settings.repeat_track));
+        let repeat = repeat_track.clone();
         let (events, latest) = async_channel::bounded(1);
         let updates = Updates {
             events,
@@ -76,6 +80,7 @@ impl Service {
                             &folder,
                             receiver,
                             &stop,
+                            &repeat,
                             &updates,
                             NativeAudio::default(),
                         );
@@ -90,10 +95,20 @@ impl Service {
                     _ => {}
                 }
             })?;
-        Ok((Self { sender, cancelled }, latest))
+        Ok((
+            Self {
+                sender,
+                cancelled,
+                repeat_track,
+            },
+            latest,
+        ))
     }
     pub fn send(&self, command: Command) {
         let _ = self.sender.try_send(command);
+    }
+    pub fn set_repeat_track(&self, enabled: bool) {
+        self.repeat_track.store(enabled, Ordering::Release);
     }
 }
 impl Drop for Service {
@@ -325,6 +340,7 @@ fn run<B: Audio>(
     folder: &Path,
     receiver: mpsc::Receiver<Command>,
     cancel: &Arc<AtomicBool>,
+    repeat_track: &AtomicBool,
     updates: &Updates,
     mut audio: B,
 ) {
@@ -370,7 +386,7 @@ fn run<B: Audio>(
                         continue;
                     }
                     loaded = false;
-                    queue.advance();
+                    queue.track_ended(repeat_track.load(Ordering::Acquire));
                     Command::Play
                 }
             }
@@ -395,11 +411,15 @@ fn run<B: Audio>(
                     state = State::Paused;
                 }
             }
-            Command::Skip => {
+            Command::Skip | Command::Previous => {
                 let playing = state == State::Playing;
                 audio.stop();
                 loaded = false;
-                queue.advance();
+                if matches!(command, Command::Previous) {
+                    queue.previous();
+                } else {
+                    queue.advance();
+                }
                 if !playing {
                     state = if queue.current().is_some() {
                         State::Paused
@@ -471,17 +491,29 @@ mod tests {
     use super::{Audio, Command, State, Updates, discover, playable_path, run};
     use muxal_core::music::Queue;
     use std::{
-        path::Path,
-        sync::{Arc, Mutex, atomic::AtomicBool, mpsc},
+        path::{Path, PathBuf},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, Ordering},
+            mpsc,
+        },
     };
     #[derive(Default)]
     struct Fake {
         calls: Arc<Mutex<Vec<&'static str>>>,
+        paths: Arc<Mutex<Vec<PathBuf>>>,
+        ended: Arc<AtomicBool>,
         failure: Option<bool>,
     }
     impl Audio for Fake {
-        fn start(&mut self, _: &Path, _: u8, _: &Arc<AtomicBool>) -> Result<(), super::StartError> {
+        fn start(
+            &mut self,
+            path: &Path,
+            _: u8,
+            _: &Arc<AtomicBool>,
+        ) -> Result<(), super::StartError> {
             self.calls.lock().unwrap().push("start");
+            self.paths.lock().unwrap().push(path.to_path_buf());
             match self.failure {
                 Some(true) => Err(super::StartError::Device("No output".into())),
                 Some(false) => Err(super::StartError::Track("Invalid track".into())),
@@ -496,7 +528,7 @@ mod tests {
         }
         fn volume(&self, _: u8) {}
         fn finished(&self) -> bool {
-            false
+            self.ended.swap(false, Ordering::AcqRel)
         }
         fn failed(&self) -> bool {
             false
@@ -525,6 +557,7 @@ mod tests {
                 &root,
                 rx,
                 &Arc::new(AtomicBool::new(false)),
+                &AtomicBool::new(false),
                 &Updates { events, latest },
                 fake,
             )
@@ -536,6 +569,16 @@ mod tests {
         let skipped = read.recv_blocking().unwrap();
         assert_eq!(skipped.state, State::Paused);
         assert_eq!(skipped.track.as_deref(), Some(Path::new("b.wav")));
+        assert!(!calls.lock().unwrap().contains(&"start"));
+        tx.send(Command::Previous).unwrap();
+        let previous = read.recv_blocking().unwrap();
+        assert_eq!(previous.state, State::Paused);
+        assert_eq!(previous.track.as_deref(), Some(Path::new("a.wav")));
+        tx.send(Command::Previous).unwrap();
+        assert_eq!(
+            read.recv_blocking().unwrap().track.as_deref(),
+            Some(Path::new("b.wav"))
+        );
         assert!(!calls.lock().unwrap().contains(&"start"));
         tx.send(Command::Play).unwrap();
         assert_eq!(read.recv_blocking().unwrap().state, State::Playing);
@@ -549,6 +592,69 @@ mod tests {
         tx.send(Command::Stop).unwrap();
         worker.join().unwrap();
         assert!(calls.lock().unwrap().contains(&"pause"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn repeat_reloads_current_track_but_manual_navigation_and_toggle_take_effect() {
+        let dir = std::env::temp_dir().join(format!("muxal-music-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["a.wav", "b.wav"] {
+            std::fs::write(dir.join(name), b"fixture").unwrap();
+        }
+        let (tx, rx) = mpsc::sync_channel(8);
+        let (events, latest) = async_channel::bounded(1);
+        let fake = Fake::default();
+        let paths = fake.paths.clone();
+        let ended = fake.ended.clone();
+        let repeat = Arc::new(AtomicBool::new(true));
+        let worker_repeat = repeat.clone();
+        let root = dir.clone();
+        let read = latest.clone();
+        let worker = std::thread::spawn(move || {
+            run(
+                Queue::new(vec!["a.wav".into(), "b.wav".into()], None),
+                false,
+                35,
+                &root,
+                rx,
+                &Arc::new(AtomicBool::new(false)),
+                &worker_repeat,
+                &Updates { events, latest },
+                fake,
+            );
+        });
+        assert_eq!(read.recv_blocking().unwrap().state, State::Paused);
+        tx.send(Command::Play).unwrap();
+        assert_eq!(read.recv_blocking().unwrap().state, State::Playing);
+        ended.store(true, Ordering::Release);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while paths.lock().unwrap().len() < 2 && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(
+            *paths.lock().unwrap(),
+            vec![dir.join("a.wav"), dir.join("a.wav")]
+        );
+        assert!(
+            read.try_recv().is_err(),
+            "Repeating needs no redundant UI update"
+        );
+        tx.send(Command::Skip).unwrap();
+        let next = read.recv_blocking().unwrap();
+        assert_eq!(next.state, State::Playing);
+        assert_eq!(next.track.as_deref(), Some(Path::new("b.wav")));
+        tx.send(Command::Previous).unwrap();
+        assert_eq!(
+            read.recv_blocking().unwrap().track.as_deref(),
+            Some(Path::new("a.wav"))
+        );
+        repeat.store(false, Ordering::Release);
+        ended.store(true, Ordering::Release);
+        let next = read.recv_blocking().unwrap();
+        assert_eq!(next.state, State::Playing);
+        assert_eq!(next.track.as_deref(), Some(Path::new("b.wav")));
+        tx.send(Command::Stop).unwrap();
+        worker.join().unwrap();
         std::fs::remove_dir_all(dir).unwrap();
     }
     #[test]
@@ -617,6 +723,7 @@ mod tests {
                     &root,
                     rx,
                     &Arc::new(AtomicBool::new(false)),
+                    &AtomicBool::new(false),
                     &Updates { events, latest },
                     fake,
                 )

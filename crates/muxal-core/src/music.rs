@@ -9,6 +9,8 @@ pub struct MusicSettings {
     #[serde(default)]
     pub autoplay: bool,
     #[serde(default)]
+    pub repeat_track: bool,
+    #[serde(default)]
     pub folder: Option<PathBuf>,
     #[serde(default)]
     pub last_track: Option<PathBuf>,
@@ -23,6 +25,7 @@ impl Default for MusicSettings {
         Self {
             enabled: false,
             autoplay: false,
+            repeat_track: false,
             folder: None,
             last_track: None,
             volume: default_volume(),
@@ -76,6 +79,16 @@ impl Queue {
             self.index = (self.index + 1) % self.tracks.len();
         }
     }
+    pub fn previous(&mut self) {
+        if !self.tracks.is_empty() {
+            self.index = (self.index + self.tracks.len() - 1) % self.tracks.len();
+        }
+    }
+    pub fn track_ended(&mut self, repeat_track: bool) {
+        if !repeat_track {
+            self.advance();
+        }
+    }
 }
 
 pub fn supported(path: &Path) -> bool {
@@ -94,7 +107,16 @@ mod tests {
     fn old_preferences_are_opted_out_and_round_trip() {
         let old: MusicSettings = serde_json::from_str("{}").unwrap();
         assert_eq!(old, MusicSettings::default());
-        assert!(!old.enabled && !old.autoplay);
+        assert!(!old.enabled && !old.autoplay && !old.repeat_track);
+        let enabled_repeat = MusicSettings {
+            repeat_track: true,
+            ..old.clone()
+        };
+        assert_eq!(
+            serde_json::from_str::<MusicSettings>(&serde_json::to_string(&enabled_repeat).unwrap())
+                .unwrap(),
+            enabled_repeat
+        );
         assert_eq!(
             serde_json::from_str::<MusicSettings>(&serde_json::to_string(&old).unwrap()).unwrap(),
             old
@@ -131,5 +153,29 @@ mod tests {
         assert!(empty.current().is_none());
         assert!(supported(Path::new("track.MP3")));
         assert!(!supported(Path::new("track.m4a")));
+    }
+    #[test]
+    fn previous_wraps_and_repeat_only_changes_natural_track_end() {
+        let mut queue = Queue::new(vec!["a.mp3".into(), "b.mp3".into()], None);
+        queue.previous();
+        assert_eq!(queue.current(), Some(Path::new("b.mp3")));
+        queue.track_ended(true);
+        assert_eq!(queue.current(), Some(Path::new("b.mp3")));
+        queue.track_ended(false);
+        assert_eq!(queue.current(), Some(Path::new("a.mp3")));
+        queue.advance();
+        assert_eq!(queue.current(), Some(Path::new("b.mp3")));
+        queue.previous();
+        assert_eq!(queue.current(), Some(Path::new("a.mp3")));
+        let mut empty = Queue::default();
+        empty.previous();
+        empty.track_ended(true);
+        empty.track_ended(false);
+        assert!(empty.current().is_none());
+        let mut single = Queue::new(vec!["only.mp3".into()], None);
+        single.previous();
+        single.track_ended(false);
+        single.track_ended(true);
+        assert_eq!(single.current(), Some(Path::new("only.mp3")));
     }
 }

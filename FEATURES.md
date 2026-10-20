@@ -748,7 +748,11 @@ feature is added or changed, update the matching entry here in the same change**
   shortcuts. Cancel restores the pre-edit bindings and terminal passthrough.
 - **Optional local music** — disabled by default, including on older settings.
   Enable under Settings → Music, select an existing folder, then use Play/Pause
-  and Skip in the sidebar footer above New Project. MP3, FLAC, PCM WAV, and Ogg
+  with Previous/Next in the sidebar footer above New Project. Previous wraps
+  from the first track to the last; changing tracks while paused stays paused.
+  A separate repeat-current-track button loops the selected track until toggled
+  off; manual Previous/Next still work. Repeat is off by default and remembered.
+  MP3, FLAC, PCM WAV, and Ogg
   Vorbis play in relative-path order through subfolders and repeat the folder.
   Volume and folder refresh live in Settings; files are read in place without
   creating project files or copying music. Folder, volume, and last track are
