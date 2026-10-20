@@ -1939,7 +1939,8 @@ impl Default for Settings {
 /// v15: repaired Grok presets saved with the generic Claude-only prompt flag.
 /// v16: added the Windows Git Bash preset.
 /// v18: retired web-browser presets; only terminal agents remain.
-pub const PRESET_SEED_VERSION: u32 = 18;
+/// v19: added Antigravity (`agy`) and Aider.
+pub const PRESET_SEED_VERSION: u32 = 19;
 
 /// Current version of the Terms of Service / Privacy notice. Bump this when the
 /// terms change so users are asked to accept again on next launch (see
@@ -2054,6 +2055,8 @@ mod settings_tests {
         assert!(s.presets.iter().any(|p| p.name == "Hermes"));
         assert!(s.presets.iter().any(|p| p.name == "Ollama"));
         assert!(s.presets.iter().any(|p| p.name == "Pi"));
+        assert!(s.presets.iter().any(|p| p.name == "Antigravity"));
+        assert!(s.presets.iter().any(|p| p.name == "Aider"));
         // Built-in runners are seeded too.
         assert!(s.runners.iter().any(|r| r.name == "Review"));
         assert!(s.runners.iter().any(|r| r.name == "Security Review"));
@@ -2062,6 +2065,32 @@ mod settings_tests {
         let counts = (s.presets.len(), s.runners.len());
         assert!(!s.seed_builtin_presets());
         assert_eq!((s.presets.len(), s.runners.len()), counts);
+    }
+
+    #[test]
+    fn preset_upgrade_preserves_custom_launches_and_merges_new_harnesses_once() {
+        let mut customized = AgentPreset::antigravity();
+        customized.program = Some("my-agy-wrapper".into());
+        customized.args = vec!["--my-option".into()];
+        let mut settings = Settings {
+            preset_seed_version: 18,
+            presets: vec![AgentPreset::pi(), customized.clone()],
+            ..Settings::default()
+        };
+        assert!(settings.seed_builtin_presets());
+        let agy = settings
+            .presets
+            .iter()
+            .find(|p| p.name == "Antigravity")
+            .unwrap();
+        assert_eq!(agy, &customized);
+        for name in ["Pi", "Antigravity", "Aider"] {
+            assert_eq!(
+                settings.presets.iter().filter(|p| p.name == name).count(),
+                1
+            );
+        }
+        assert!(!settings.seed_builtin_presets());
     }
 
     #[test]

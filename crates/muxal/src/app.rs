@@ -691,6 +691,8 @@ fn agent_icon_path(program: Option<&str>) -> SharedString {
         Some(p) if p.contains("hermes") => "icons/agent-hermes.svg",
         Some(p) if p.contains("ollama") => "icons/agent-ollama.svg",
         Some(p) if p == "pi" || p.contains("pi.dev") || p.contains("pidev") => "icons/agent-pi.svg",
+        Some("agy" | "agy.exe" | "agy.cmd") => "icons/agent-antigravity.svg",
+        Some(p) if p.contains("aider") => "icons/agent-aider.svg",
         Some(_) => "icons/agent-generic.svg",
         None => "icons/agent-shell.svg",
     }

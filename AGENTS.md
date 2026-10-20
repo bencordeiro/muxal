@@ -217,6 +217,9 @@ Hard rules while doing this:
 The user decides when and what to release (they GUI-test in dev first). The
 ritual, in order:
 
+Always pass `--repo bencordeiro/muxal` to release/CI `gh` commands. With both
+origin and upstream remotes, `gh` can otherwise infer upstream Muxel.
+
 1. **Bump the version in three places**: workspace `Cargo.toml` `version`,
    `packaging/macos/Info.plist` (`CFBundleVersion` +
    `CFBundleShortVersionString`), and `Cargo.lock` (cargo updates it on the next
@@ -258,6 +261,16 @@ add a new `##` category if none fits).
 ## Where things stand (update this section when it changes)
 
 As of **v0.5.4** (tag `d1a01a4`, published and promoted):
+
+- **Release authorization (2026-10-19):** the user requested the complete dev
+  work be released as **v0.5.5** after adding one or two common harness presets.
+  Add **Antigravity (`agy`)** and **Aider (`aider`)**; Copilot is explicitly
+  declined and must not be added or proposed again. Pi is already seeded even
+  when absent from PATH (Settings shows missing tools; launch menus filter them).
+  The user has authorized this release and its normal promotion ritual following
+  their dev reviews. Earlier "promotion unapproved" notes below describe the
+  previous state; do not ask again. Complete the gates, version bump, tagged
+  release, published-asset verification, and atomic promotion. Never restart main.
 
 - **Release content:** manual agent handoffs, the compact sidebar **input** label
   and Pi prompt lifecycle binding, terminal search ownership/stale-match fixes,

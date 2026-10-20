@@ -401,6 +401,28 @@ impl AgentPreset {
         }
     }
 
+    /// Antigravity's terminal CLI (the `agy` launcher).
+    pub fn antigravity() -> Self {
+        Self {
+            name: "Antigravity".into(),
+            program: Some("agy".into()),
+            model_flag: default_model_flag(),
+            injection: InjectionMode::TypeIn,
+            ..Self::shell()
+        }
+    }
+
+    /// Aider's interactive terminal interface; uses the user's configured model.
+    pub fn aider() -> Self {
+        Self {
+            name: "Aider".into(),
+            program: Some("aider".into()),
+            model_flag: default_model_flag(),
+            injection: InjectionMode::TypeIn,
+            ..Self::shell()
+        }
+    }
+
     pub fn defaults() -> Vec<AgentPreset> {
         let mut presets = vec![Self::shell()];
         // On Windows, offer cmd.exe and Git Bash alongside the PowerShell default.
@@ -419,6 +441,8 @@ impl AgentPreset {
             Self::ollama(),
             Self::ollama_code(),
             Self::pi(),
+            Self::antigravity(),
+            Self::aider(),
         ]);
         presets
     }
@@ -1059,6 +1083,34 @@ mod tests {
         let mut i = Instance::from_preset(Uuid::new_v4(), preset);
         i.system_prompt = prompt.map(|p| p.to_string());
         i
+    }
+
+    #[test]
+    fn added_harnesses_launch_interactively_with_optional_model_and_startup_text() {
+        for (mut preset, program) in [
+            (AgentPreset::antigravity(), "agy"),
+            (AgentPreset::aider(), "aider"),
+        ] {
+            let launch = resolve_launch(&instance(&preset, Some("Reviewed handoff\nNext step")));
+            assert_eq!(launch.program.as_deref(), Some(program));
+            assert!(launch.args.is_empty());
+            assert_eq!(
+                launch.startup_input.as_deref(),
+                Some("Reviewed handoff Next step")
+            );
+            preset.model = Some("user-chosen-model".into());
+            let launch = resolve_launch(&instance(&preset, None));
+            assert_eq!(launch.args, ["--model", "user-chosen-model"]);
+            assert_eq!(launch.startup_input, None);
+        }
+        let catalog = AgentPreset::defaults();
+        for program in ["pi", "agy", "aider"] {
+            assert!(
+                catalog
+                    .iter()
+                    .any(|p| p.program.as_deref() == Some(program))
+            );
+        }
     }
 
     #[test]

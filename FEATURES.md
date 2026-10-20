@@ -92,8 +92,12 @@ feature is added or changed, update the matching entry here in the same change**
   current selection follows its preset while dragging.
 
 - **Built-in agent presets** — Shell, Claude, opencode, Amp (ampcode), Grok
-  (x.ai), Codex, Hermes, Ollama, **Ollama Code**, and Pi, each with its own icon.
+  (x.ai), Codex, Hermes, Ollama, **Ollama Code**, Pi, **Antigravity** (`agy`), and
+  **Aider** (`aider`), each with its own icon.
   All presets launch terminals/agents; edit their fields in Settings → Agents.
+  The complete catalog is present even without the programs installed: Settings
+  marks missing programs as **not installed**, while launch menus show runnable
+  presets. New built-ins merge once without replacing matching custom presets.
 - **Ollama Code** — runs a coding agent backed by an Ollama model via
   `ollama launch <agent> --model <model>` (seeded as `ollama launch opencode
   --model glm-5.2:cloud`); change the agent or model in the preset's args.
