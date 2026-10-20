@@ -37,7 +37,10 @@ documented in [FEATURES.md](FEATURES.md) and in this repository's git history.
 - **gpui** — Zed Industries, Apache-2.0
 - **alacritty_terminal** — Alacritty contributors, Apache-2.0
 - **Some icons in `assets/icons/`** — [Lucide](https://lucide.dev), ISC
-- **Bundled themes** — derive from the curated set in upstream muxel (GPL-3.0)
+- **Bundled themes** — the curated set from upstream Muxel (GPL-3.0), plus
+  original muxal palettes. Workbench Dark uses familiar classic-editor colors;
+  Clay Dark is inspired by Anthropic's published colors. Neither bundles third-party
+  branding assets or implies endorsement. See [the theme review](docs/theme-review.md).
 
 Apache-2.0 and ISC are compatible with GPL-3.0 distribution; their terms
 require keeping the copyright and license notices, which this section serves.

@@ -699,10 +699,10 @@ feature is added or changed, update the matching entry here in the same change**
 
 - **Settings modal** — sections for Appearance, Editor, Behavior, Agents,
   Runners, Snippets, Loops, Projects, and Keybindings.
-- **Themes** — 19 curated choices: Default Light/Dark, Gruvbox Light/Dark,
+- **Themes** — 21 curated choices: Default Light/Dark, Gruvbox Light/Dark,
   Ayu Light/Dark, Catppuccin Latte/Frappe, Alduin, Everforest Dark,
   Fahrenheit, Molokai Dark, Spaceduck, Tokyo Dark, Twilight Grey, Liquid
-  Spaceglass, Porcelain, Ember Observatory, and Mainframe. Fahrenheit adds red accents;
+  Spaceglass, Porcelain, Ember Observatory, Mainframe, Workbench Dark, and Clay Dark. Fahrenheit adds red accents;
   Spaceduck pairs plum surfaces with golden focus accents, orchid, and turquoise;
   Tokyo Dark adds electric blue, ice-cyan active tabs, and sakura-pink syntax on
   deep indigo. Tokyo consolidates the former Night/Storm/Moon variants (saved
@@ -713,6 +713,13 @@ feature is added or changed, update the matching entry here in the same change**
   pale-blue focus accents. Terminal ANSI and editor syntax colors remain distinct
   and readable. Existing Default Dark selections receive the refreshed palette;
   saved choices of other themes keep their selection.
+- **Workbench Dark** — an original graphite palette with familiar classic-editor
+  colors: blue keywords, jade types, warm orange strings, pale-gold functions,
+  and sky-blue properties. Neutral layered chrome and distinct terminal/status
+  colors keep it usable beside agents; Default Dark remains the default.
+- **Clay Dark** — Claude-inspired warm charcoal, ivory text, and terracotta-orange
+  focus accents, with restrained sage, blue, and sand syntax and terminal colors.
+  An optional dark theme; it keeps the normal interface fonts and layout.
 - **Mainframe** — black terminal backgrounds with phosphor-green text, neutral
   charcoal chrome, gray labels and borders, and restrained green focus accents.
   Editor syntax stays green with amber literals; ANSI/status colors remain

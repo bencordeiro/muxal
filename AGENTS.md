@@ -180,6 +180,10 @@ Unit tests can't see the UI, so for anything visual:
   running — rename only, or ETXTBSY. See README "Dev / main workflow".
 - State each visual behavior that needs a human's eyes — the harness can build and
   smoke-test, but can't see colors/layout.
+- **Basic visual reviews are the user's job.** Do not control the desktop with
+  mouse/keyboard automation or take screenshots for routine theme/layout checks.
+  Run code/tests and the isolated launch smoke, then give the user a compact
+  review checklist. Desktop control requires an explicit request for that work.
 
 ### Updating the installed main (agent checklist)
 
@@ -271,6 +275,15 @@ As of **v0.5.4** (tag `d1a01a4`, published and promoted):
   reports v0.5.4. The user's running main still needs their own restart to switch;
   never restart or kill it yourself. Spider, including Phase 2, is ready
   for user review on `dev/spider-map`. Promotion has not been approved.
+- **Theme review (dev):** all 19 existing choices reviewed in
+  `docs/theme-review.md`. Added optional **Workbench Dark** (classic editor
+  graphite/blue/jade/orange) and **Clay Dark** (Claude-inspired warm charcoal,
+  ivory, terracotta); the public collection now has 21 themes. Default Dark
+  remains the default. Both use the existing loader/tint pipeline. Contrast
+  checks, full gates (608 Rust tests), extract-only i18n, isolated-HOME smoke,
+  and native theme/settings/terminal/Spider checks passed. Fresh review windows
+  are **Muxal — Clay Dark review** and **Muxal — Workbench Dark review**.
+  Human visual acceptance and promotion remain pending.
 - **Upcoming work — fully remove the built-in web browser (decided 2026-10-18):**
   the user has decided to retire it entirely. It does not fit the intended
   workflow, adds clutter and confusion, and can accidentally route users into a

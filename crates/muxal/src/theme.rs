@@ -152,7 +152,7 @@ pub fn set_ui_font_size(size: f32, cx: &mut App) {
 #[action(namespace = muxal, no_json)]
 pub struct SwitchTheme(pub SharedString);
 
-/// The bundled theme JSON files (vendored from gpui-component's `themes/`).
+/// Bundled theme JSON files: curated upstream themes and original muxal palettes.
 #[derive(RustEmbed)]
 #[folder = "assets/themes"]
 struct ThemeAssets;
@@ -341,6 +341,8 @@ mod tests {
             "Spaceduck",
             "Tokyo Dark",
             "Twilight Grey",
+            "Workbench Dark",
+            "Clay Dark",
         ]
         .into_iter()
         .map(str::to_string)
