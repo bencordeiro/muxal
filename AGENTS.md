@@ -260,198 +260,93 @@ add a new `##` category if none fits).
 
 ## Where things stand (update this section when it changes)
 
-As of **v0.5.4** (tag `d1a01a4`, published and promoted):
+As of **v0.5.5** (tag `3fb4610`, published and promoted; verified 2026-10-20):
 
-- **Release authorization (2026-10-19):** the user requested the complete dev
-  work be released as **v0.5.5** after adding one or two common harness presets.
-  Add **Antigravity (`agy`)** and **Aider (`aider`)**; Copilot is explicitly
-  declined and must not be added or proposed again. Pi is already seeded even
-  when absent from PATH (Settings shows missing tools; launch menus filter them).
-  The user has authorized this release and its normal promotion ritual following
-  their dev reviews. Earlier "promotion unapproved" notes below describe the
-  previous state; do not ask again. Master now includes the completed dev work;
-  the app and macOS bundle versions are bumped to 0.5.5. The final gate passed:
-  formatting, strict Clippy, 599 active Rust tests (one manual benchmark ignored),
-  build, 644-key i18n check, and isolated-HOME smoke. The built binary reports
-  0.5.5. Tagged release, published-asset verification, and atomic promotion remain.
-  Never restart main.
-
-- **Release CI fixture follow-up:** macOS rejects the invalid UTF-8 filename
-  deliberately created by one Spider scanner test. Split its Linux-only
-  filesystem case from portable Unix symlink coverage; no production code
-  changed. The local gate passes with 600 active tests (one benchmark ignored),
-  build, i18n check, and isolated-HOME smoke. Corrected master CI is required
-  before promotion; the already-pushed release tag stays unchanged.
-
-- **Release content:** manual agent handoffs, the compact sidebar **input** label
-  and Pi prompt lifecycle binding, terminal search ownership/stale-match fixes,
-  immediate history-clear repaint, live focus after pane close/detach, timely
-  terminal query replies, and the `.deb` dependency fix for current Ubuntu/Debian.
-  Handoffs and bug fixes are fully gated; all 548 Rust tests pass. The user
-  verified handoffs in dev, including full-text delivery and transfer-file cleanup.
-- **Release verified:** `master` and annotated `v0.5.4` are pushed; all native
-  release builds and regular CI checks passed. All ten published package checksums
-  are OK (zero failures). The downloaded Linux binary reports v0.5.4; macOS bundle
-  versions and the `.deb` t64 alternatives were checked too. GitHub release notes
-  include Added, Fixed, Development, and the full comparison link.
-- **Local main:** promoted using `scripts/promote.sh`; the installed binary
-  reports v0.5.4. The user's running main still needs their own restart to switch;
-  never restart or kill it yourself. Spider, including Phase 2, is ready
-  for user review on `dev/spider-map`. Promotion has not been approved.
-- **Theme review (dev):** all 19 existing choices reviewed in
-  `docs/theme-review.md`. Added optional **Clay Dark** (Claude-inspired warm
-  charcoal, ivory, terracotta); the public collection now has 20 themes. Default
-  Dark remains the default. Clay Dark and Fahrenheit received the user-requested
-  subtle lift of dark surfaces (about 2% toward white), with accents/text intact.
-  The user declined Workbench Dark as too similar to existing choices; it is
-  removed. Clay uses the existing loader/tint pipeline. The user liked Clay
-  before the final small brightness lift; final brightness review remains.
-  Existing review windows use older binaries until the user restarts dev. Basic
-  visual reviews are user-led; do not automate desktop interactions for them.
-  Promotion remains unapproved.
-- **Appearance picker fix (dev):** the user reported the theme dropdown collapsing
-  to a thin strip. Theme and language now use GPUI's measured `Select` lists
-  rather than overflow-only `PopupMenu` sizing. Heights are capped by the live
-  viewport, widths respect the settings content, and selections resync when
-  Settings opens (including after Cancel). Full gate passed: formatting, strict
-  Clippy, 597 active Rust tests, build, 644-key i18n check, and isolated-HOME
-  launch smoke. User visual review remains pending; restart dev to use the fix.
-- **Built-in web browser removal (dev):** implemented and locally verified.
-  Formatting, strict Clippy, all 597 active Rust tests (one manual benchmark
-  ignored), debug/release builds, extract-only i18n (644 keys), and the isolated
-  HOME launch smoke passed. Browser panes/presets,
-  settings/type/homepage controls, HTML preview, native webviews/helper process,
-  browser-specific focus telemetry, and browser-only dependencies/assets are
-  removed. Deliberate web-link actions use the OS handler; local files, including
-  HTML source, use the editor. The filesystem file browser stays. Pure
-  compatibility decoders in `muxal-core::compat` retire saved browser data while
-  preserving other panes, tab groups, split weights, and settings; loops bound
-  to retired presets are disabled for review. The native dependency audit
-  (`ldd`, `readelf`, `dpkg-shlibdeps`) confirms no GTK/GLib/WebKit/JavaScriptCore/
-  libsoup runtime requirement. The .deb list and CI build dependencies are
-  updated; AppImage packaging no longer needs the browser exclusion closure.
-  A local .deb builds with the expected five runtime dependencies. The local
-  host requires glibc 2.39; published packages keep CI's Ubuntu 22.04 baseline
-  (2.35). Native CI packages will be checked as part of the release ritual.
-  Never restore the embedded browser
-  or change `ios/`, which remains its historical snapshot. User dev review and
-  explicit promotion approval are still required.
-- **Passed on / parked — do not re-propose without being asked:** the tmux
-  survival layer (tmux isn't even installed on this machine; the user isn't
-  interested), layout presets, cursor-flicker work, startup-delay audit, and
-  all macOS extras (app menu, notifications) — the user runs macOS and says it
-  works fine. The attention inbox is also declined; the user prefers the compact
-  sidebar status for requests needing a response.
-- **Upstream** (`ProjectHax/muxel`) is watched for **ideas only** (last checked
-  2026-10: 77 commits across v0.2.5–v0.3.1; its remote/Windows/iOS bulk is
-  irrelevant to this local-only fork). Findings are distilled into `IDEAS.md`.
-- **Manual agent handoffs** are complete in v0.5.4 (developed on
-  `dev/agent-handoffs`):
-  opt-in prepare/review/start buttons (Settings → Behavior), full reviewed text
-  sent directly in a fresh recipient's opening prompt, same source directory/
-  worktree, and one-shot input. Source transfer files are temporary: after capture
-  and a durable save, the review lives in workspace.json and transfers are deleted.
-  Cleanup also handles cancellation, late files, and earlier orphaned transfers;
-  old receiving panes retain referenced files until closed. Handoff logic is in
-  `muxal-core::handoff`, documents in `muxal-store::handoff`, UI in
-  `app/handoffs.rs`. Never trigger or chain handoffs automatically. **Complete:**
-  the user verified direct-text delivery in dev and cleanup was confirmed for
-  their exact test request; all 548 Rust tests, real Pi input verification, and
-  sandbox launch gates passed. **Future changes still require explicit user
-  approval before promotion.**
-- **Next feature direction:** the user authorized implementation of the agreed
-  Spider map after v0.5.4. The proposal and open decisions live in
-  `docs/spider-map-plan.md`. The user confirmed a normal resizable/tabbed pane
-  beside agents, with compact map controls and both layout/overlay choices added
-  gradually. Spider must be opt-in in Settings and **disabled by default**;
-  disabling stops its background work and preserves existing tabs as placeholders.
-  The initial live sandbox render received positive preliminary feedback. The
-  full gate passes (597 Rust tests, plus the manual observer benchmark),
-  extract-only i18n is current (644 English keys), and the
-  isolated-HOME launch smoke passed. A restored disabled tab launched no scans;
-  the enabled native map scanned this repository in about 0.3 seconds. The
-  100,000-file pure-model fixture completed in about 0.8 seconds with 53 MiB peak
-  RSS and at most 300 visible nodes. Final human review is pending for compact
-  readability, controls/navigation, settings disable/re-enable, and pane/window
-  operations. **Phase 2 is implemented in dev:** independent default-off Recent
-  activity (25-second cyan glow) and Code connections (Rust, JavaScript,
-  TypeScript/JSX/TSX, and Python imports, optional indirect paths up to three hops).
-  Related paths are revealed within the existing visible-node budget; Inspect
-  supplies exact incoming/outgoing paths and coverage limitations. This uses
-  the existing syntax parser, without compiler/LSP processes or agent hooks.
-  Native events are shared per visible checkout (at most four); the activity
-  observer reads zero source contents, never polls the checkout, and observation
-  stops when overlays are off or no map is visible. Bounded event queues retain
-  only one latest graph. Atomic saves do not invent new permanent paths; source
-  edits update links without rescanning. With Recent activity visible/enabled,
-  detected additions, renames, and removals now trigger coalesced background
-  inventory refreshes (one-second quiet time, five-second burst deferral, minimum
-  five seconds between scan starts). Changes during a scan stay pending; failure
-  requires manual retry; hiding/disabling the final activity consumer cancels
-  automatic work. Camera, expansions, and glow ages survive refresh. The header
-  checkout label now returns to the root overview independently of View; Back
-  restores the previous view. Native sandbox checks confirmed automatic create,
-  rename, and removal refreshes, a regular save without an inventory scan, and
-  the header button working with View closed. Metrics otherwise use manual
-  Refresh. Measured
-  observer startup on this repository: about 20 ms for activity only; about
-  281 ms for connections, 81 source/manifest reads, 75 source files and 145 links
-  after adding JS/TS/Python (6 unresolved imports, no partial-coverage flag).
-  Agent checks confirmed the visible glow/fade, direct/indirect inspector links,
-  and observer shutdown when toggles are off or the shell is maximized. Final
-  visual acceptance remains the user's. File activity never identifies an
-  agent; the user has declined agent attribution entirely. Keep
-  these resource limits and honest labels. Do not promote without explicit approval.
-  Human review clarified **expansion first**: double-click/Enter/Space opens or
-  closes a branch within the wider map while readable, previewing immediate
-  child folders. Crowding is decided by fitted node/label geometry and the pane's
-  node budget, not total repository size or depth alone. Only crowded expansion
-  focuses a subtree; double-clicking its center or using Back/Backspace restores
-  the previous expansion and camera. History is bounded to 32 views and survives
-  detach/re-dock; resize/live activity never changes focus automatically. The
-  recent-file halo now appears on the actual visible changed file, otherwise
-  only its nearest visible containing folder. The project root never receives
-  this activity halo; navigating does not restart its 25-second clock. Projection
-  is cached, so pan/hover does not rescan activity paths. Native sample checks
-  confirmed successive nested expansions preserving the whole small project,
-  double-click collapse, file/folder glow transfer, and a quiet root. Final human
-  review should judge the crowding cutoff in the user's preferred pane sizes.
-  Follow-up fixed small-folder focus in broad checkouts: expansion now compares
-  label suppression with the previous view, so unrelated existing label crowding
-  does not force `.cargo` into focus. Node collisions, clipping, and node budgets
-  remain hard limits. Regression coverage opens `.cargo` and `.github` in both
-  orders at three pane sizes, checks collapse, and preserves crowded-branch focus.
-  View hides its redundant single-choice Checkout row; worktree selection and
-  missing-checkout recovery retain it. The review sandbox is **Spider — folder
-  expansion fixes**; prior running windows retain their older builds. The user
-  approved committing and pushing the current Spider checkpoint on its dev
-  branch; additional user-requested work remains before any release. No version
-  bump, release tag, merge to master, or promotion is authorized by that approval.
-- Cross-pane scrollback search is also declined; don't re-propose it unasked.
-- Backlog lives in `IDEAS.md` (spider map `sketched`, worktree board,
-  day timeline, cost meter, …).
-- The user drives versioning: patch releases when enough has landed (v0.5.2 =
-  three changes, v0.5.3 = one fix), tested in `scripts/dev.sh` before shipping.
-
-- **Spider follow-up language boundary (2026-10-19):** the user authorized basic
-  code connections for JavaScript, TypeScript (including JSX/TSX), and Python,
-  alongside existing Rust support. No additional languages are wanted. Reuse
-  bundled syntax parsers and the shared bounded observer; do not add language
-  servers, compiler/interpreter execution, custom-alias guessing, or agent hooks.
-  Agent attribution is explicitly declined. The language gate passed with 607
-  tests; native checks showed the expected JS/TS and Python links and paths.
-- **Default Dark refresh (2026-10-19):** the user requested a brighter, balanced
-  charcoal theme while retaining Default Dark as the fresh-install default.
-  The new bundled palette has layered charcoal surfaces, soft text, pale-blue
-  accents, and distinct terminal/syntax/status colors. GPUI rejects duplicate
-  theme names, so the registry uses `Muxal Default Dark` internally; application
-  theme helpers map the existing Default Dark label and empty settings to it.
-  Keep the picker label, persisted choices, and fresh/unknown-theme fallback
-  coherent. Other saved theme choices stay selected. Full gate passed with
-  608 tests, strict Clippy, build, 659-string i18n extraction/check, and an
-  isolated-HOME smoke with saved Default Dark. Native checks confirmed fresh
-  fallback, the public picker label, switching Light → Dark, saving Default Dark,
-  menus/controls, ANSI colors, and JS/TS/Python map links. Core text contrast is
-  about 12.1:1 and muted text 6.9:1 on the main background. The current sandbox
-  is **Muxal — Default Dark review**. Final visual acceptance remains the user's;
-  more user tasks remain before any release or promotion.
+- **Release complete:** Spider maps and Phase 2, Rust/JS/TS/JSX/TSX/Python import
+  connections, brighter Default Dark, Clay Dark, subtle Clay/Fahrenheit surface
+  lifts, measured appearance pickers, Antigravity and Aider presets, and complete
+  built-in web browser removal. Default Dark remains the fresh-install default;
+  there are 20 themes. Workbench Dark was declined and removed.
+- **Verification:** native Linux x86/ARM and universal macOS release builds passed.
+  All ten downloaded package checksums are OK, zero failures. The published Linux
+  binary reports 0.5.5; both macOS bundle versions and both .deb metadata/dependency
+  lists were checked. The published Linux binary has no retired browser runtime
+  stack. Corrected master CI is green. Formatting, strict Clippy, workspace tests,
+  build, 644-key i18n check, and isolated-HOME smoke passed. A post-tag test-only
+  correction (`78a97df`) separates Linux invalid-UTF-8 filename fixtures from
+  portable Unix symlink tests; production code is identical to the release tag.
+  The local Linux gate passes 600 active tests (one manual benchmark ignored).
+- **Local main:** `scripts/promote.sh` atomically installed 0.5.5 and refreshed
+  the launcher. The installed binary reports 0.5.5. The user must restart main
+  themselves; never kill or restart it. This release and promotion were explicitly
+  authorized following dev review. Future changes need fresh promotion approval.
+  `master`, `dev/spider-map`, and the annotated tag are pushed. GitHub notes use
+  Added/Changed/Fixed/Removed/Development and the full comparison link. Always
+  use `--repo bencordeiro/muxal` with release/CI gh commands.
+- **Spider:** complete; design notes in `docs/spider-map-plan.md`. A normal
+  resizable/tabbed pane, disabled by default in Settings. Disabling stops work
+  and preserves tabs as placeholders. Radial/tree layouts, Structure/Git overlays,
+  physical text-line sizing, Find, Inspect, and worktree scopes are implemented.
+  Expansion/collapse retains the wider map while readable; geometry and node
+  budgets, not repository size/depth, decide crowded-subtree focus. Back/Backspace
+  or double-clicking the focused center restores the previous expansion/camera.
+  History is bounded to 32 views and survives detach/re-dock. Resize/live activity
+  never changes focus automatically. Small .cargo/.github expansion regressions
+  are covered; existing label suppression must not force unrelated subtree focus.
+  The header root button works with View closed; its redundant single-checkout
+  menu row is hidden. Crowding/readability acceptance belongs to the user.
+- **Spider Phase 2:** independent default-off Recent activity and Code connections.
+  Saved files glow cyan for 25 seconds, otherwise only their nearest visible
+  containing folder glows; the project root never glows. Navigation/refresh
+  preserves original timestamps. Additions/renames/removals trigger coalesced
+  inventory refresh while Recent activity is enabled/visible: one-second quiet
+  time, five-second burst deferral, minimum five seconds between scan starts.
+  Changes during scans remain pending; failures require manual retry. Camera and
+  expansions survive refresh. Ordinary edits update glow/import links without
+  inventory scans; other metrics use manual Refresh. Syntax-based local imports
+  support Rust, JavaScript, TypeScript, JSX/TSX, and Python only, with exact
+  incoming/outgoing paths, honest coverage limits, and optional three-hop indirect
+  links. No additional languages, compiler/LSP/interpreter processes, alias
+  guessing, or agent hooks. Agent attribution is explicitly declined. Native
+  observers are shared per visible checkout (at most four), event queues/latest
+  graphs are bounded, activity reads no source contents, and observers stop when
+  unused or disabled. No whole-checkout polling. Keep these resource limits.
+- **Browser removal:** complete. Web panes/presets/settings, HTML preview,
+  webview backends/helpers, browser-only assets, and 69 unused Cargo packages are
+  removed. Deliberate web links use the system browser; local files including
+  HTML source use the editor. The filesystem file browser stays. Pure
+  `muxal-core::compat` decoders retire old browser data without losing unrelated
+  panes/tabs/weights/settings; loops bound to removed presets are disabled for
+  review. Loading old data never opens URLs. Linux no longer requires
+  GTK/GLib/WebKit/JavaScriptCore/libsoup; .deb dependencies, AppImage packaging,
+  CI, licensing, and docs are updated. CI packages retain glibc 2.35 baseline.
+  Never restore the embedded browser or alter the historical `ios/` snapshot.
+- **Harness presets:** Pi is always seeded even when absent from PATH; Settings
+  shows missing tools and launch menus filter them. Antigravity (`agy`) and Aider
+  (`aider`) use normal interactive defaults and editable model options. Seed
+  version 19 merges additions once without replacing matching custom presets.
+  **Copilot is explicitly declined; do not add or propose it.**
+- **Themes:** palette audit in `docs/theme-review.md`. Clay Dark uses warm
+  charcoal/ivory/terracotta inspired by Claude; Clay and Fahrenheit surfaces
+  received the requested subtle brightness lift. Refreshed Default Dark uses
+  internal registry name `Muxal Default Dark` because GPUI rejects duplicates;
+  helpers preserve public/persisted Default Dark and fresh/unknown fallback.
+  Theme/language pickers use measured Select lists, bounded by live viewport,
+  and resync on Settings open. Basic visual reviews belong to the user: no
+  desktop input automation or screenshots without an explicit request.
+- **Manual handoffs:** complete since v0.5.4. Opt-in prepare/review/start buttons
+  send full reviewed text into a fresh recipient in the same directory/worktree.
+  Temporary transfer files are removed after capture and durable workspace save;
+  cancellation, late files, and old orphans are cleaned up. Old receiving panes
+  retain referenced files until closed. Logic: `muxal-core::handoff`, documents:
+  `muxal-store::handoff`, UI: `app/handoffs.rs`. Never trigger or chain handoffs
+  automatically. Compact `input` status and Pi prompt lifecycle binding also
+  shipped in v0.5.4, alongside search/focus/query-reply fixes.
+- **Parked/declined — do not re-propose unasked:** tmux survival layer, layout
+  presets, cursor-flicker work, startup-delay audit, macOS extras, attention inbox,
+  and cross-pane scrollback search. The user prefers compact sidebar status for
+  questions/permission requests and controls versioning/release scope.
+- **Upstream** (`ProjectHax/muxel`) is watched for ideas only (last checked
+  2026-10: 77 commits across v0.2.5–v0.3.1); remote/Windows/iOS work is irrelevant
+  to this local-only fork. Preserve Muxel provenance and `ios/`. Personal backlog
+  is `IDEAS.md`, deliberately ignored and never staged.
