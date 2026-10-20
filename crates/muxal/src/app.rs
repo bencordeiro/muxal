@@ -21429,7 +21429,7 @@ impl MuxalApp {
     }
 
     fn render_settings_projects(&self, cx: &mut Context<Self>) -> AnyElement {
-        let mut list = v_flex().w(rems(10.0)).flex_none().gap_1();
+        let mut list = v_flex().w(rems(10.0)).min_w_0().flex_none().gap_1();
         for project in &self.workspace.projects {
             let pid = project.id;
             let selected = self.settings_ui.selected_project == Some(pid);
@@ -21437,7 +21437,21 @@ impl MuxalApp {
                 Button::new(SharedString::from(format!("proj-item-{pid}")))
                     .ghost()
                     .selected(selected)
-                    .label(project.name.clone())
+                    // Button's ordinary label is flex-none and centered, so a
+                    // long name can paint beyond both sides of its column.
+                    .w_full()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .tooltip(project.name.clone())
+                    .child(
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .text_left()
+                            .child(project.name.clone()),
+                    )
                     .on_click(cx.listener(move |this, _e, window, cx| {
                         this.open_project_editor(pid, window, cx)
                     })),
@@ -21458,6 +21472,8 @@ impl MuxalApp {
         div()
             .flex()
             .flex_row()
+            .w_full()
+            .min_w_0()
             .gap_4()
             .child(list)
             .child(div().flex_1().min_w_0().child(editor))

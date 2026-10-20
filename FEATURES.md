@@ -687,7 +687,9 @@ feature is added or changed, update the matching entry here in the same change**
 - **Settings modal** — sections for Appearance, Editor, Behavior, Agents,
   Runners, Snippets, Loops, Projects, Keybindings, and Music. Theme and language pickers
   use measured, scrollable choice lists with a height bounded by the current
-  window; the full list stays accessible with mouse or keyboard.
+  window; the full list stays accessible with mouse or keyboard. Long project
+  names stay within their settings list column, truncate with an ellipsis, and
+  show the full name on hover.
 - **Themes** — 20 curated choices: Default Light/Dark, Gruvbox Light/Dark,
   Ayu Light/Dark, Catppuccin Latte/Frappe, Alduin, Everforest Dark,
   Fahrenheit, Molokai Dark, Spaceduck, Tokyo Dark, Twilight Grey, Liquid

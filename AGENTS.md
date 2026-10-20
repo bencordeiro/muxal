@@ -287,6 +287,10 @@ As of **v0.5.5** (tag `3fb4610`, published and promoted; verified 2026-10-20):
   via `scripts/dev.sh`; the user controls its music choices.
   Main is unchanged; no promotion/version bump/release is
   authorized. Do not automate desktop review or play audible test music.
+  Human review confirmed music works and found a long project-name overflow in
+  Settings → Projects. Project rows now constrain and ellipsize their text, with
+  the full name on hover; the editor retains its own column. Restart dev manually
+  to load the fix; never interrupt a running review or main yourself.
   The user's next idea is subtle optional navigation/workflow sound effects;
   record/design separately after this review, not implemented in this change.
 - **Release complete:** Spider maps and Phase 2, Rust/JS/TS/JSX/TSX/Python import
