@@ -276,6 +276,13 @@ As of **v0.5.4** (tag `d1a01a4`, published and promoted):
   0.5.5. Tagged release, published-asset verification, and atomic promotion remain.
   Never restart main.
 
+- **Release CI fixture follow-up:** macOS rejects the invalid UTF-8 filename
+  deliberately created by one Spider scanner test. Split its Linux-only
+  filesystem case from portable Unix symlink coverage; no production code
+  changed. The local gate passes with 600 active tests (one benchmark ignored),
+  build, i18n check, and isolated-HOME smoke. Corrected master CI is required
+  before promotion; the already-pushed release tag stays unchanged.
+
 - **Release content:** manual agent handoffs, the compact sidebar **input** label
   and Pi prompt lifecycle binding, terminal search ownership/stale-match fixes,
   immediate history-clear repaint, live focus after pane close/detach, timely

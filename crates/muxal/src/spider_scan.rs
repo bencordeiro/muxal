@@ -878,22 +878,34 @@ mod tests {
     }
     #[cfg(unix)]
     #[test]
-    fn symlinks_and_non_utf8_names_keep_identity_without_reading_targets() {
-        use std::os::unix::{ffi::OsStringExt, fs::symlink};
+    fn symlinks_keep_identity_without_reading_targets() {
+        use std::os::unix::fs::symlink;
         let root = fixture();
-        let name = std::ffi::OsString::from_vec(b"file-\xff".to_vec());
-        std::fs::write(root.join(&name), "x").unwrap();
         symlink("/etc", root.join("outside")).unwrap();
         symlink(".", root.join("loop")).unwrap();
         assert!(super::open_project_file(&root, Path::new("outside/passwd")).is_err());
         assert!(super::open_project_file(&root, Path::new("loop/outside/passwd")).is_err());
         let snapshot = scan(root.clone(), cancel()).unwrap();
-        assert!(snapshot.tree.find(Path::new(&name)).is_some());
         assert_eq!(
             snapshot.tree.nodes[snapshot.tree.find(Path::new("outside")).unwrap()].kind,
             Kind::Symlink
         );
         assert!(snapshot.tree.find(Path::new("outside/passwd")).is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    // APFS rejects invalid UTF-8 names; exercise this filesystem case on Linux
+    // without preventing the portable symlink checks from running on macOS.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn non_utf8_names_keep_their_path_identity() {
+        use std::os::unix::ffi::OsStringExt;
+        let root = fixture();
+        let name = std::ffi::OsString::from_vec(b"file-\xff".to_vec());
+        std::fs::write(root.join(&name), "x").unwrap();
+        let snapshot = scan(root.clone(), cancel()).unwrap();
+        let id = snapshot.tree.find(Path::new(&name)).unwrap();
+        assert_eq!(snapshot.tree.nodes[id].lines, 1);
+        assert!(snapshot.tree.find(Path::new("file-\u{fffd}")).is_none());
         std::fs::remove_dir_all(root).unwrap();
     }
 }
