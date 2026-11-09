@@ -16,8 +16,9 @@ publish the matching version section; older releases remain available on the
 
 ### Development
 
-- Use the native Intel macOS runner for routine CI after repeated hosted Apple
-  Silicon allocation failures; universal release builds retain both architectures.
+- Use the native Intel macOS runner for routine CI and release packaging after
+  repeated hosted Apple Silicon allocation failures. The universal app retains
+  both Intel and Apple Silicon architectures.
 - Add test-only shutdown phase reporting and an on-demand native macOS terminal
   regression workflow for full-queue shutdown failures.
 - Make the full-queue shutdown fixture deterministic: explicitly ignore hangup,

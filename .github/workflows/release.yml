@@ -10,8 +10,8 @@ name: release
 #   macOS   — a universal .app (Intel x86_64 + Apple Silicon) inside a .dmg + .zip
 #
 # Linux aarch64 builds on a native ARM64 runner. GPUI can't be cross-compiled
-# across OSes, so each OS builds on its own runner; within macOS, x86_64 is
-# cross-compiled from the Apple Silicon runner (cross-arch in one OS is fine).
+# across OSes, so each OS builds on its own runner; within macOS, Apple Silicon
+# is cross-compiled from Intel (cross-arch in one OS is fine).
 #
 # macOS is signed + notarized in-job by scripts/sign-macos.sh when the MACOS_*
 # secrets (a paid Apple Developer ID + an App Store Connect notary key) are
@@ -189,13 +189,13 @@ jobs:
 
   # ----------------------------------------------------------------------------
   # macOS — a single UNIVERSAL app (Intel x86_64 + Apple Silicon aarch64 in one
-  # binary via `lipo`). Both arches build on Apple Silicon — aarch64 natively,
-  # x86_64 cross-compiled (Apple's toolchain handles x86_64<->arm64 within macOS),
-  # avoiding the Intel macos-13 runner Apple is retiring. Bundles muxal.app and
+  # binary via `lipo`). Both arches build on Intel — x86_64 natively, aarch64
+  # cross-compiled (Apple's toolchain handles both within macOS). The Intel pool
+  # avoids recurring Apple Silicon runner allocation failures. Bundles muxal.app and
   # ships one .dmg + .zip that runs on any Mac.
   # ----------------------------------------------------------------------------
   macos:
-    runs-on: macos-15
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable

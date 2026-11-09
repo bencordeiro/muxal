@@ -292,7 +292,8 @@ runs 631 active tests, zero failures (one ignored); the local Linux gate passes
 the same eight-second deadline that failed before the runtime fix. Routine CI
 uses `macos-15-intel` to avoid recurring Apple Silicon hosted-runner allocation
 failures. On-demand terminal diagnostics retain both runner choices; universal
-release builds still cover both Mac architectures.
+release builds still cover both Mac architectures. Release packaging now also
+uses Intel runners to avoid the same recurring Apple Silicon allocation failure.
 
 The owner has now authorized corrective release v0.5.8, including normal package
 verification and atomic promotion. Master includes the verified fix and notes;
