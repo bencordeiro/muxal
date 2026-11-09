@@ -267,38 +267,38 @@ add a new `##` category if none fits).
 
 ## Where things stand (update this section when it changes)
 
-**v0.5.7 published; Mac shutdown follow-up verified (2026-11-09):** The
-owner approved handoff/reliability and theme work and requested the release.
-Published tag `v0.5.7` remains at `2e484e3`. All native release/package jobs
-succeeded; all ten downloaded checksums pass. The published Linux binary reports
-0.5.7, resolves libraries, and retains GLIBC 2.35; both .deb versions are 0.5.7-1.
-The universal Mac bundle has both architectures and both version fields at 0.5.7.
-Release notes match CHANGELOG. Atomic promotion installed 0.5.7 and refreshed the
-launcher; the owner restarts their windows themselves. Never restart them.
+**v0.5.8 published and promoted (2026-11-09):** The owner authorized the
+corrective release and explicitly approved updating installed main. Published
+tag `v0.5.8` is at `a3a2d52`; the published v0.5.7 tag remains unchanged at
+`2e484e3`. Release run `42710214667` and full CI run `42710177638` succeeded.
+All ten downloaded package checksums pass, with zero failures. The published
+Linux binary reports 0.5.8, resolves libraries, and retains GLIBC 2.35; both .deb
+versions are 0.5.8-1 with the ALSA t64/old dependency alternatives intact. The
+universal Mac bundle contains Intel and Apple Silicon binaries, and both bundle
+version fields are 0.5.8. Published notes exactly match CHANGELOG.
+`scripts/promote.sh` atomically installed 0.5.8 and refreshed the launcher;
+the installed binary reports 0.5.8. The owner restarts their windows themselves;
+never restart them. Future promotion requires fresh approval.
 
-**Actual Mac fix is on master, not in the published v0.5.7 packages:** Initial
-Mac CI exposed a three-second shutdown-test deadline shorter than its five-second
-cleanup grace. Extending that deadline was insufficient: native tracing located
-a real saturated-PTY stall after SIGKILL while a session retained the master.
-Commit `d03c4e1` pins a flush handle only during bounded closed-pane cleanup and
-discards pending PTY data after forced termination, allowing the BSD writer to
-exit and be reaped. Live streams never flush; finished panes retain no reader fd.
+**Mac shutdown fix shipped:** Initial Mac CI exposed both a shutdown-test
+deadline shorter than its cleanup grace and a real saturated-PTY stall after
+SIGKILL while a session retained the master. Commit `d03c4e1` pins a flush handle
+only during bounded closed-pane cleanup and discards pending PTY data after
+forced termination, allowing the BSD writer to exit and be reaped. Live streams
+never flush; finished panes retain no reader fd. Native regression coverage uses
+the same eight-second deadline that failed before the runtime fix.
 
-Verification is complete for that code commit: full CI run `42665411542` passed
-all Linux x86/ARM, native Intel Mac, lint, i18n, and installer checks. Native Mac
-runs 631 active tests, zero failures (one ignored); the local Linux gate passes
-638 active tests and isolated-HOME launch smoke. Native terminal diagnostic run
-`42665485351` also passes the exact regression and all 131 terminal tests, with
-the same eight-second deadline that failed before the runtime fix. Routine CI
-uses `macos-15-intel` to avoid recurring Apple Silicon hosted-runner allocation
-failures. On-demand terminal diagnostics retain both runner choices; universal
-release builds still cover both Mac architectures. Release packaging now also
-uses Intel runners to avoid the same recurring Apple Silicon allocation failure.
+The version-bump local Linux gate passes 638 active tests (one ignored), strict
+Clippy, formatting, build, the 705-key translation check, and isolated-HOME launch
+smoke. Final native Mac CI passes 631 active tests, zero failures (one ignored).
+Routine CI and universal packaging now use `macos-15-intel` to avoid recurring
+Apple Silicon hosted-runner allocation failures; the universal release retains
+both architectures. On-demand terminal diagnostics retain both runner choices.
+The initial v0.5.8 packaging attempt was cancelled before publication to correct
+its runner; only the unpublished tag was updated. Never move a published tag.
 
-The owner has now authorized corrective release v0.5.8, including normal package
-verification and atomic promotion. Master includes the verified fix and notes;
-the version-bump gate and publication are in progress. Never move the published
-v0.5.7 tag. Cross-harness end-to-end handoff coverage and
+Verification notes are recorded on `dev/shell-agent-handoffs`, leaving master at
+the fully verified release commit. Cross-harness end-to-end handoff coverage and
 manual native Mac GUI/playback review remain unverified.
 
 - Shell handoffs recognize Codex, Antigravity (`agy`), Claude, OpenCode, and Pi
