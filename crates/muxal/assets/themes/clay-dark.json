@@ -7,7 +7,7 @@
       "is_default": false,
       "mode": "dark",
       "colors": {
-        "background": "#2A2A28",
+        "background": "#2E2C28",
         "foreground": "#FAF9F5",
         "border": "#494943",
         "input.border": "#626159",
@@ -29,10 +29,10 @@
         "button.foreground": "#FAF9F5",
         "button.hover.background": "#4C4C46",
         "button.active.background": "#56564F",
-        "sidebar.background": "#252523",
+        "sidebar.background": "#383631",
         "sidebar.foreground": "#E8E6DC",
         "sidebar.border": "#494943",
-        "sidebar.accent.background": "#49372F",
+        "sidebar.accent.background": "#4E3930",
         "sidebar.accent.foreground": "#FAF9F5",
         "sidebar.primary.background": "#4E3930",
         "sidebar.primary.foreground": "#EDAD93",
@@ -61,8 +61,8 @@
         "switch.thumb.background": "#E8E6DC",
         "skeleton.background": "#3D3D38",
         "tiles.background": "#252523",
-        "title_bar.background": "#252523",
-        "title_bar.border": "#494943",
+        "title_bar.background": "#2B2A27",
+        "title_bar.border": "#45433D",
         "status_bar.background": "#252523",
         "status_bar.border": "#494943",
         "list.background": "#2A2A28",
@@ -124,7 +124,7 @@
         "chart_bearish": "#DC9390"
       },
       "highlight": {
-        "editor.background": "#2A2A28",
+        "editor.background": "#2E2C28",
         "editor.foreground": "#FAF9F5",
         "editor.active_line.background": "#31312D",
         "editor.line_number": "#99988D",
@@ -233,6 +233,30 @@
           "variable": {
             "color": "#E8E6DC"
           }
+        }
+      },
+      "muxal": {
+        "floor": "#26241F",
+        "divider": "#26241F",
+        "focused_header": "#5C3A2C",
+        "focused_header_text": "#FFE5D9",
+        "idle_header": "#2A2926",
+        "idle_header_text": "#C7C5BB",
+        "idle_border": "#3D3B36",
+        "terminal": {
+          "background": "#181715",
+          "foreground": "#F5F2E9",
+          "cursor": "#D97757",
+          "selection": "#734B3F",
+          "ansi": [
+            "#2C2A27", "#DC9390", "#A8B98B", "#D9C38C", "#91B1D1", "#B9A7C9", "#99BFB4", "#E8E6DC",
+            "#A5A296", "#EDB3AD", "#C3D0AA", "#EBDCBA", "#BAD0E5", "#D6C7E2", "#BED9CE", "#FAF9F5"
+          ]
+        },
+        "status": {
+          "working_text": "#F0B59E",
+          "input_text": "#EBCF9F",
+          "done_text": "#B2DFC3"
         }
       }
     }

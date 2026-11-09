@@ -309,6 +309,19 @@ for their explicit approval to promote main after they test dev. Never restart
 their windows. Handoffs were reported working by the user but cross-harness
 end-to-end coverage and native macOS behavior remain unverified.
 
+**Unreleased theme work, awaiting the user's dev review:** Themes may add an
+optional `muxal` section of independent zone colors (terminal, floor, pane headers,
+status text), resolved in `theme.rs`; anything omitted keeps its previous color.
+The user approved this from design mockups as colors only: **no layout or
+structural changes**. Verdigris, Mainframe, Clay Dark, Ledger, Ledger Dark, Rosewood,
+Ember Observatory, and Ayu Dark use zones, for 24 public themes; rationale is in
+`docs/theme-review.md`. Ayu Light is deliberately unchanged. Mainframe must
+remain a hacker-green theme with neutral surfaces and labels: green belongs only in
+text and accents, because tinted surfaces were reviewed and rejected as too green
+on green. Because `working` uses `primary`, a theme's accent must stay distinct
+from its `warning` and `success` colors. Dialog zones, extra text and border
+levels, and palette fixes for older themes are suggested but not chosen.
+
 **Unreleased handoff follow-up:** `dev/shell-agent-handoffs` adds manual
 handoffs for recognized Codex, Antigravity (`agy`), Claude, OpenCode, and Pi
 processes started inside Shell panes on Linux and macOS. Detection is active

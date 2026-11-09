@@ -25,6 +25,7 @@ muxal-tray.workspace = true
 anyhow.workspace = true
 log.workspace = true
 uuid.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 # Shared UI/background channels (already in the tree via muxal-terminal).
 async-channel = "2.3"

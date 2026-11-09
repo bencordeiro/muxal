@@ -7,6 +7,8 @@ use gpui_component::{ActiveTheme, Theme, ThemeConfig, ThemeRegistry};
 use muxal_core::ambience::{AMBIENCE_MAX, ambience_blend};
 use muxal_terminal::TerminalPalette;
 use rust_embed::RustEmbed;
+use serde::Deserialize;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 /// Fallback interface font size (gpui-component's `Root` drives the window
@@ -157,9 +159,210 @@ pub struct SwitchTheme(pub SharedString);
 #[folder = "assets/themes"]
 struct ThemeAssets;
 
+/// Optional per-theme colors for the areas GPUI's theme schema has no key for.
+/// Every value is optional: anything a theme omits keeps its pre-zone color.
+#[derive(Clone, Default, Deserialize)]
+#[serde(default)]
+struct ZoneSpec {
+    floor: Option<String>,
+    divider: Option<String>,
+    focused_header: Option<String>,
+    focused_header_text: Option<String>,
+    idle_header: Option<String>,
+    idle_header_text: Option<String>,
+    idle_border: Option<String>,
+    terminal: TerminalSpec,
+    status: Option<StatusSpec>,
+}
+
+#[derive(Clone, Default, Deserialize)]
+#[serde(default)]
+struct TerminalSpec {
+    background: Option<String>,
+    foreground: Option<String>,
+    cursor: Option<String>,
+    selection: Option<String>,
+    ansi: Option<[String; 16]>,
+}
+
+/// Text colors for soft, tinted status badges. Omitted: solid badges.
+#[derive(Clone, Deserialize)]
+struct StatusSpec {
+    working_text: String,
+    input_text: String,
+    done_text: String,
+}
+
+#[derive(Deserialize)]
+struct ZoneFile {
+    themes: Vec<ZoneTheme>,
+}
+
+#[derive(Deserialize)]
+struct ZoneTheme {
+    name: String,
+    muxal: Option<ZoneSpec>,
+}
+
+struct ZoneSpecs(HashMap<String, ZoneSpec>);
+impl Global for ZoneSpecs {}
+
+/// Text colors for soft status badges, resolved for the active theme.
+#[derive(Clone, Copy)]
+pub struct SoftStatus {
+    pub working: Hsla,
+    pub input: Hsla,
+    pub done: Hsla,
+}
+
+/// Resolved colors for each independently themed area of the window.
+#[derive(Clone, Copy)]
+pub struct Zones {
+    pub floor: Hsla,
+    pub divider: Hsla,
+    pub focused_header: Hsla,
+    pub focused_header_text: Hsla,
+    pub idle_header: Hsla,
+    pub idle_header_text: Hsla,
+    pub idle_border: Hsla,
+    pub terminal_background: Hsla,
+    pub terminal_foreground: Hsla,
+    pub terminal_cursor: Hsla,
+    pub terminal_selection: Hsla,
+    pub terminal_ansi: [Hsla; 16],
+    /// True when the terminal's light/dark sense is opposite the app's, so
+    /// elements drawn on it can't reuse the app's text colors.
+    pub terminal_inverted: bool,
+    pub soft_status: Option<SoftStatus>,
+}
+impl Global for Zones {}
+
+impl Zones {
+    /// The muted tone for text drawn directly on the terminal surface.
+    pub fn terminal_muted(&self) -> Hsla {
+        self.terminal_ansi[8]
+    }
+}
+
+/// The app-theme colors each zone falls back to.
+struct ZoneBase {
+    background: Hsla,
+    foreground: Hsla,
+    caret: Hsla,
+    selection: Hsla,
+    border: Hsla,
+    title_bar: Hsla,
+    secondary: Hsla,
+    muted_foreground: Hsla,
+    ansi: [Hsla; 16],
+    is_dark: bool,
+}
+
+fn zone_base(cx: &App) -> ZoneBase {
+    let t = cx.theme();
+    ZoneBase {
+        background: t.background,
+        foreground: t.foreground,
+        caret: t.caret,
+        selection: t.selection,
+        border: t.border,
+        title_bar: t.title_bar,
+        secondary: t.secondary,
+        muted_foreground: t.muted_foreground,
+        ansi: [
+            t.muted,            // 0  black (~ subtle bg)
+            t.red,              // 1  red
+            t.green,            // 2  green
+            t.yellow,           // 3  yellow
+            t.blue,             // 4  blue
+            t.magenta,          // 5  magenta
+            t.cyan,             // 6  cyan
+            t.foreground,       // 7  white (~ fg)
+            t.muted_foreground, // 8  bright black
+            t.red_light,        // 9  bright red
+            t.green_light,      // 10 bright green
+            t.yellow_light,     // 11 bright yellow
+            t.blue_light,       // 12 bright blue
+            t.magenta_light,    // 13 bright magenta
+            t.cyan_light,       // 14 bright cyan
+            t.foreground,       // 15 bright white
+        ],
+        is_dark: t.mode.is_dark(),
+    }
+}
+
+/// Parse a theme color, applying the ambience cast the rest of the theme gets.
+fn zone_color(value: &str, strength: f32) -> Option<Hsla> {
+    let tinted = (strength != 0.0)
+        .then(|| tint_color(value, strength))
+        .flatten();
+    let rgba = Rgba::try_from(tinted.as_deref().unwrap_or(value)).ok()?;
+    Some(rgba.into())
+}
+
+fn resolve_zones(spec: Option<&ZoneSpec>, base: &ZoneBase, strength: f32) -> Zones {
+    let default_spec = ZoneSpec::default();
+    let spec = spec.unwrap_or(&default_spec);
+    let pick = |value: &Option<String>, fallback: Hsla| {
+        value
+            .as_deref()
+            .and_then(|value| zone_color(value, strength))
+            .unwrap_or(fallback)
+    };
+    let terminal_background = pick(&spec.terminal.background, base.background);
+    let terminal_ansi = std::array::from_fn(|i| {
+        spec.terminal
+            .ansi
+            .as_ref()
+            .and_then(|ansi| zone_color(&ansi[i], strength))
+            .unwrap_or(base.ansi[i])
+    });
+    let soft_status = spec.status.as_ref().and_then(|status| {
+        Some(SoftStatus {
+            working: zone_color(&status.working_text, strength)?,
+            input: zone_color(&status.input_text, strength)?,
+            done: zone_color(&status.done_text, strength)?,
+        })
+    });
+    Zones {
+        floor: pick(&spec.floor, base.background),
+        divider: pick(&spec.divider, base.border),
+        focused_header: pick(&spec.focused_header, base.title_bar),
+        focused_header_text: pick(&spec.focused_header_text, base.muted_foreground),
+        idle_header: pick(&spec.idle_header, base.secondary),
+        idle_header_text: pick(&spec.idle_header_text, base.muted_foreground),
+        idle_border: pick(&spec.idle_border, base.border),
+        terminal_background,
+        terminal_foreground: pick(&spec.terminal.foreground, base.foreground),
+        terminal_cursor: pick(&spec.terminal.cursor, base.caret),
+        terminal_selection: pick(&spec.terminal.selection, base.selection),
+        terminal_ansi,
+        terminal_inverted: base.is_dark == (terminal_background.l > 0.5),
+        soft_status,
+    }
+}
+
+/// Recompute the zones after a theme or ambience change.
+fn set_zones(theme_name: &str, cx: &mut App) {
+    let strength = ambience_blend(ambience_cast(cx));
+    let spec = cx
+        .try_global::<ZoneSpecs>()
+        .and_then(|specs| specs.0.get(theme_name).cloned());
+    let zones = resolve_zones(spec.as_ref(), &zone_base(cx), strength);
+    cx.set_global(zones);
+}
+
+/// The active theme's zone colors.
+pub fn zones(cx: &App) -> Zones {
+    cx.try_global::<Zones>()
+        .copied()
+        .unwrap_or_else(|| resolve_zones(None, &zone_base(cx), 0.0))
+}
+
 /// Load all bundled theme sets into the global registry.
 pub fn register_bundled_themes(cx: &mut App) {
     let mut loaded = 0;
+    let mut zone_specs = HashMap::new();
     for file in ThemeAssets::iter() {
         let Some(embedded) = ThemeAssets::get(&file) else {
             continue;
@@ -171,7 +374,16 @@ pub fn register_bundled_themes(cx: &mut App) {
             Ok(()) => loaded += 1,
             Err(e) => log::warn!("failed to load theme {file}: {e}"),
         }
+        match serde_json::from_str::<ZoneFile>(text) {
+            Ok(set) => zone_specs.extend(
+                set.themes
+                    .into_iter()
+                    .filter_map(|theme| Some((theme.name, theme.muxal?))),
+            ),
+            Err(e) => log::warn!("failed to read zones in theme {file}: {e}"),
+        }
     }
+    cx.set_global(ZoneSpecs(zone_specs));
     log::info!("loaded {loaded} bundled theme file(s)");
 }
 
@@ -212,8 +424,9 @@ pub fn apply_initial_theme(name: &str, cx: &mut App) {
             .or_else(|| registry.themes().get(DEFAULT_DARK_THEME).cloned())
             .unwrap_or_else(|| registry.default_dark_theme().clone())
     };
-    let config = ambience_config(&config, ambience_blend(ambience_cast(cx)));
-    Theme::global_mut(cx).apply_config(&config);
+    let tinted = ambience_config(&config, ambience_blend(ambience_cast(cx)));
+    Theme::global_mut(cx).apply_config(&tinted);
+    set_zones(config.name.as_ref(), cx);
     apply_scale(cx);
     apply_mono_font(cx);
 }
@@ -223,8 +436,9 @@ pub fn apply_theme(name: &str, cx: &mut App) {
     let name = canonical_theme_name(name);
     let config = ThemeRegistry::global(cx).themes().get(name).cloned();
     if let Some(config) = config {
-        let config = ambience_config(&config, ambience_blend(ambience_cast(cx)));
-        Theme::global_mut(cx).apply_config(&config);
+        let tinted = ambience_config(&config, ambience_blend(ambience_cast(cx)));
+        Theme::global_mut(cx).apply_config(&tinted);
+        set_zones(config.name.as_ref(), cx);
         apply_scale(cx);
         apply_mono_font(cx);
         cx.refresh_windows();
@@ -265,42 +479,16 @@ fn hsla_to_u32(c: Hsla) -> u32 {
     (r << 16) | (g << 8) | b
 }
 
-/// Build a terminal color palette from the active theme.
-///
-/// gpui-component themes expose the six ANSI hues (+ `_light` brights) plus
-/// background/foreground; black/white are derived from muted/foreground.
+/// Build a terminal color palette from the active theme's terminal zone.
 pub fn palette_from_theme(cx: &App) -> TerminalPalette {
-    let t = cx.theme();
-    // Mainframe keeps its chrome neutral while terminal text uses phosphor green.
-    let foreground = if t.theme_name().as_ref() == "Mainframe" {
-        t.green
-    } else {
-        t.foreground
-    };
+    let z = zones(cx);
     TerminalPalette {
         spaceglass: is_spaceglass(cx),
-        background: hsla_to_u32(t.background),
-        foreground: hsla_to_u32(foreground),
-        cursor: hsla_to_u32(t.caret),
-        selection: hsla_to_u32(t.selection),
-        ansi: [
-            hsla_to_u32(t.muted),            // 0  black (~ subtle bg)
-            hsla_to_u32(t.red),              // 1  red
-            hsla_to_u32(t.green),            // 2  green
-            hsla_to_u32(t.yellow),           // 3  yellow
-            hsla_to_u32(t.blue),             // 4  blue
-            hsla_to_u32(t.magenta),          // 5  magenta
-            hsla_to_u32(t.cyan),             // 6  cyan
-            hsla_to_u32(t.foreground),       // 7  white (~ fg)
-            hsla_to_u32(t.muted_foreground), // 8  bright black
-            hsla_to_u32(t.red_light),        // 9  bright red
-            hsla_to_u32(t.green_light),      // 10 bright green
-            hsla_to_u32(t.yellow_light),     // 11 bright yellow
-            hsla_to_u32(t.blue_light),       // 12 bright blue
-            hsla_to_u32(t.magenta_light),    // 13 bright magenta
-            hsla_to_u32(t.cyan_light),       // 14 bright cyan
-            hsla_to_u32(t.foreground),       // 15 bright white
-        ],
+        background: hsla_to_u32(z.terminal_background),
+        foreground: hsla_to_u32(z.terminal_foreground),
+        cursor: hsla_to_u32(z.terminal_cursor),
+        selection: hsla_to_u32(z.terminal_selection),
+        ansi: z.terminal_ansi.map(hsla_to_u32),
     }
 }
 
@@ -342,6 +530,10 @@ mod tests {
             "Tokyo Dark",
             "Twilight Grey",
             "Clay Dark",
+            "Verdigris",
+            "Rosewood",
+            "Ledger",
+            "Ledger Dark",
         ]
         .into_iter()
         .map(str::to_string)
@@ -371,6 +563,109 @@ mod tests {
         assert_eq!(display_theme_name(DEFAULT_DARK_THEME), "Default Dark");
         assert_eq!(display_theme_name("Default Light"), "Default Light");
         assert_eq!(canonical_theme_name("Ayu Dark"), "Ayu Dark");
+    }
+}
+
+#[cfg(test)]
+mod zone_tests {
+    use super::{ThemeAssets, ZoneBase, ZoneFile, ZoneSpec, resolve_zones, zone_color};
+    use gpui::{Hsla, Rgba};
+
+    fn color(hex: &str) -> Hsla {
+        Rgba::try_from(hex).unwrap().into()
+    }
+
+    fn base(is_dark: bool) -> ZoneBase {
+        ZoneBase {
+            background: color("#101010"),
+            foreground: color("#eeeeee"),
+            caret: color("#00ff00"),
+            selection: color("#333366"),
+            border: color("#444444"),
+            title_bar: color("#202020"),
+            secondary: color("#303030"),
+            muted_foreground: color("#999999"),
+            ansi: std::array::from_fn(|_| color("#777777")),
+            is_dark,
+        }
+    }
+
+    fn spec(terminal_background: &str) -> ZoneSpec {
+        serde_json::from_value(serde_json::json!({
+            "floor": "#0a0a0a",
+            "terminal": { "background": terminal_background }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_theme_without_zones_keeps_every_previous_color() {
+        let z = resolve_zones(None, &base(true), 0.0);
+        assert_eq!(z.floor, color("#101010"));
+        assert_eq!(z.terminal_background, color("#101010"));
+        assert_eq!(z.terminal_foreground, color("#eeeeee"));
+        assert_eq!(z.focused_header, color("#202020"));
+        assert_eq!(z.idle_header, color("#303030"));
+        assert_eq!(z.idle_border, color("#444444"));
+        assert_eq!(z.divider, color("#444444"));
+        assert!(!z.terminal_inverted);
+        assert!(z.soft_status.is_none());
+    }
+
+    #[test]
+    fn zones_override_only_the_areas_a_theme_sets() {
+        let z = resolve_zones(Some(&spec("#000000")), &base(true), 0.0);
+        assert_eq!(z.floor, color("#0a0a0a"));
+        assert_eq!(z.terminal_background, color("#000000"));
+        assert_eq!(z.idle_header, color("#303030"));
+    }
+
+    #[test]
+    fn a_terminal_opposite_the_app_mode_is_inverted() {
+        assert!(resolve_zones(Some(&spec("#000000")), &base(false), 0.0).terminal_inverted);
+        assert!(resolve_zones(Some(&spec("#ffffff")), &base(true), 0.0).terminal_inverted);
+        assert!(!resolve_zones(Some(&spec("#000000")), &base(true), 0.0).terminal_inverted);
+    }
+
+    #[test]
+    fn ambience_tints_zone_colors() {
+        assert_ne!(zone_color("#808080", 0.15), zone_color("#808080", 0.0));
+    }
+
+    #[test]
+    fn invalid_zone_values_fall_back() {
+        let z = resolve_zones(Some(&spec("nope")), &base(true), 0.0);
+        assert_eq!(z.terminal_background, color("#101010"));
+    }
+
+    #[test]
+    fn every_bundled_zone_color_parses() {
+        for file in ThemeAssets::iter() {
+            let asset = ThemeAssets::get(&file).unwrap();
+            let set: ZoneFile = serde_json::from_slice(&asset.data).unwrap();
+            for theme in set.themes {
+                let Some(spec) = theme.muxal else { continue };
+                for value in [
+                    &spec.floor,
+                    &spec.divider,
+                    &spec.focused_header,
+                    &spec.focused_header_text,
+                    &spec.idle_header,
+                    &spec.idle_header_text,
+                    &spec.idle_border,
+                    &spec.terminal.background,
+                    &spec.terminal.foreground,
+                    &spec.terminal.cursor,
+                    &spec.terminal.selection,
+                ] {
+                    let value = value.as_deref().expect(&theme.name);
+                    assert!(zone_color(value, 0.0).is_some(), "{}: {value}", theme.name);
+                }
+                let ansi = spec.terminal.ansi.expect(&theme.name);
+                assert!(ansi.iter().all(|c| zone_color(c, 0.0).is_some()));
+                assert!(spec.status.is_some(), "{}", theme.name);
+            }
+        }
     }
 }
 

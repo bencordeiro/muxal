@@ -36,6 +36,22 @@ publish the matching version section; older releases remain available on the
   started inside Shell panes on Linux and macOS. The new pane uses the agent's
   actual working directory and preserves known worktree identity. Muxal checks
   the foreground process and directory before sending and starting the handoff.
+- Refine Mainframe's hacker-green look: phosphor text and accents stay, now on a
+  black screen inside a neutral graphite frame with tiered syntax greens. Finished
+  agents read cyan so they no longer match working agents.
+- Refresh Clay Dark with deep warm ink terminals inside a lighter stone frame and
+  a terracotta header on the focused pane.
+- Rework Ember Observatory with a night-sky terminal, coal top bar, and ember
+  focused header. Its working and input statuses were identical and now differ.
+- Rework Ayu Dark with ink terminals in a slate-blue frame and a citron accent, and
+  make its previously near-unreadable secondary text legible.
+
+### Added
+
+- Themes can now color the terminal, the gaps behind panes, pane headers, and
+  status badges independently. Themes that don't use this look the same as before.
+- Four themes: Verdigris (deep teal, bronze, and copper), Rosewood (red-brown wood
+  and cool aqua), Ledger (warm paper with dark terminals), and Ledger Dark.
 
 ## v0.5.6 — 2026-10-20
 

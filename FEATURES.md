@@ -698,10 +698,11 @@ feature is added or changed, update the matching entry here in the same change**
   window; the full list stays accessible with mouse or keyboard. Long project
   names stay within their settings list column, truncate with an ellipsis, and
   show the full name on hover.
-- **Themes** — 20 curated choices: Default Light/Dark, Gruvbox Light/Dark,
+- **Themes** — 24 curated choices: Default Light/Dark, Gruvbox Light/Dark,
   Ayu Light/Dark, Catppuccin Latte/Frappe, Alduin, Everforest Dark,
   Fahrenheit, Molokai Dark, Spaceduck, Tokyo Dark, Twilight Grey, Liquid
-  Spaceglass, Porcelain, Ember Observatory, Mainframe, and Clay Dark. Fahrenheit adds red accents;
+  Spaceglass, Porcelain, Ember Observatory, Mainframe, Clay Dark, Verdigris,
+  Rosewood, and Ledger Light/Dark. Fahrenheit adds red accents;
   Spaceduck pairs plum surfaces with golden focus accents, orchid, and turquoise;
   Tokyo Dark adds electric blue, ice-cyan active tabs, and sakura-pink syntax on
   deep indigo. Tokyo consolidates the former Night/Storm/Moon variants (saved
@@ -716,11 +717,34 @@ feature is added or changed, update the matching entry here in the same change**
   saved choices of other themes keep their selection.
 - **Clay Dark** — Claude-inspired warm charcoal, ivory text, and terracotta-orange
   focus accents, with restrained sage, blue, and sand syntax and terminal colors.
-  An optional dark theme; it keeps the normal interface fonts and layout.
-- **Mainframe** — black terminal backgrounds with phosphor-green text, neutral
-  charcoal chrome, gray labels and borders, and restrained green focus accents.
-  Editor syntax stays green with amber literals; ANSI/status colors remain
-  distinct for errors, warnings, and other terminal output.
+  Terminals are a deep warm ink inside a lighter stone frame, with a terracotta
+  header on the focused pane. An optional dark theme; it keeps the normal
+  interface fonts and layout.
+- **Theme zones** — Verdigris, Mainframe, Clay Dark, Ledger, Ledger Dark, Rosewood,
+  Ember Observatory, and Ayu Dark color
+  each part of the window independently: the terminal (background, text, and all
+  sixteen ANSI colors), the gaps behind panes, focused and unfocused pane headers,
+  and soft status badges. Terminal color queries report the terminal's own colors,
+  so programs choose the right look even when a light app has dark terminals.
+  Themes without zone colors keep their previous appearance.
+- **Mainframe** — the hacker-green theme: phosphor-green terminal and editor text
+  on a black screen set inside a neutral graphite frame, with gray interface text
+  and green reserved for text and accents. Syntax uses tiers of green with lime
+  strings, teal types, and amber literals. Finished agents read cyan and waiting
+  agents amber, so status stays distinct from working green.
+- **Verdigris** — oxidized copper: dark ink terminals in a deep-teal frame, a bronze
+  top bar, and a lit copper header on the focused pane, with a hot copper accent
+  and distinct yellow, mint, and copper status colors.
+- **Rosewood** — a visibly red-brown wood frame, oxblood terminals, and an espresso
+  top bar, with a cool teal header on the focused pane and an aqua accent: the
+  mirror image of Verdigris. Rose keywords and sage strings.
+- **Ayu Dark** — ink terminals inside a slate-blue frame with a citron accent drawn
+  from Ayu's own lime, marigold for waiting agents, cyan for finished ones, and
+  Ayu's orange and blue syntax with readable secondary text.
+- **Ledger** — warm-neutral paper chrome and dark ink terminals, with banker's
+  green focus and fully readable secondary labels.
+- **Ledger Dark** — the same idea for night work: a green-bound top bar, aged
+  parchment-toned surfaces, ink terminals, and a banker's-green focused header.
 - **Liquid Spaceglass** — a procedural navy/teal/violet space backdrop, sparse
   fixed stars, translucent blue glaze, and fine luminous glass edges in terminal
   panes, with translucent chrome and opaque menus for readability. The effect is
@@ -728,8 +752,10 @@ feature is added or changed, update the matching entry here in the same change**
   explicit terminal application backgrounds still paint normally.
 - **Original palettes** — Porcelain fills the cool-light gap with blue-white
   surfaces, petrol-blue controls, and copper syntax accents. Ember Observatory
-  brings warm aubergine surfaces, amber focus accents, and jade strings. Each has
-  coordinated editor, terminal ANSI, selection, status, and chrome colors.
+  pairs a night-sky terminal and indigo-violet frame with a burnt-coal top bar and
+  a glowing ember header on the focused pane; waiting agents read rose and finished
+  ones jade. Each has coordinated editor, terminal ANSI, selection, status, and
+  chrome colors.
 - **Keyboard-confirmable dialogs** — every warning/confirmation dialog (close
   tab/pane, quit, pop-out close, delete confirms) takes keyboard focus the
   moment it opens: **Enter confirms, Escape cancels**, no mouse needed. Focus

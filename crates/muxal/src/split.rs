@@ -7,7 +7,6 @@ use gpui::{
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Render,
     StatefulInteractiveElement, Style, Styled, Window, div, point, px, relative, size,
 };
-use gpui_component::ActiveTheme;
 use muxal_core::geometry::{fixed_panel_size, proportional_sizes};
 use std::{ops::Range, rc::Rc};
 
@@ -366,12 +365,20 @@ impl Element for Split {
                         cx.new(|_| Drag)
                     });
                 handle = match axis {
-                    Axis::Horizontal => handle
-                        .cursor_col_resize()
-                        .child(div().ml(px(3.5)).w(px(1.0)).h_full().bg(cx.theme().border)),
-                    Axis::Vertical => handle
-                        .cursor_row_resize()
-                        .child(div().mt(px(3.5)).h(px(1.0)).w_full().bg(cx.theme().border)),
+                    Axis::Horizontal => handle.cursor_col_resize().child(
+                        div()
+                            .ml(px(3.5))
+                            .w(px(1.0))
+                            .h_full()
+                            .bg(crate::theme::zones(cx).divider),
+                    ),
+                    Axis::Vertical => handle.cursor_row_resize().child(
+                        div()
+                            .mt(px(3.5))
+                            .h(px(1.0))
+                            .w_full()
+                            .bg(crate::theme::zones(cx).divider),
+                    ),
                 };
                 let mut handle = handle.into_any_element();
                 handle.layout_as_root(handle_size.map(AvailableSpace::Definite), window, cx);

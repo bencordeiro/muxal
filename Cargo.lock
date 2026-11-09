@@ -4475,6 +4475,7 @@ dependencies = [
  "raw-window-handle",
  "rodio",
  "rust-embed",
+ "serde",
  "serde_json",
  "sys-locale",
  "ureq",

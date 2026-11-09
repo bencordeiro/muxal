@@ -904,7 +904,19 @@ fn nodrag(el: impl IntoElement) -> Div {
 }
 
 /// A small status pill for an agent.
-fn status_tag(status: AgentStatus, label: String) -> Tag {
+fn status_tag(status: AgentStatus, label: String, cx: &App) -> Tag {
+    let soft_text = crate::theme::zones(cx)
+        .soft_status
+        .and_then(|soft| match status {
+            AgentStatus::Working => Some(soft.working),
+            AgentStatus::Blocked => Some(soft.input),
+            AgentStatus::Done => Some(soft.done),
+            AgentStatus::Idle => None,
+        });
+    if let Some(text) = soft_text {
+        let tint = status_hsla(status, cx).opacity(0.15);
+        return Tag::custom(tint, text, tint).child(label);
+    }
     match status {
         AgentStatus::Working => Tag::primary().child(label),
         AgentStatus::Idle => Tag::new().child(label),
@@ -13927,7 +13939,7 @@ impl MuxalApp {
             .items_center()
             .justify_center()
             .gap_2()
-            .text_color(cx.theme().muted_foreground)
+            .text_color(crate::theme::zones(cx).terminal_muted())
             .child(Spinner::new().small().ease(linear))
             .child(t("Starting terminal…"))
             .into_any_element()
@@ -13974,6 +13986,14 @@ impl MuxalApp {
                     tabs[leaf_active]
                 };
                 let is_active = pane_has_focus;
+                let zones = crate::theme::zones(cx);
+                // App warning/error colors assume the app's own surfaces; a
+                // terminal of the opposite brightness needs its own.
+                let (term_warning, term_danger) = if zones.terminal_inverted {
+                    (zones.terminal_ansi[3], zones.terminal_ansi[1])
+                } else {
+                    (cx.theme().warning, cx.theme().danger)
+                };
                 let content: AnyElement = if let Some(view) = self.terminals.get(&iid) {
                     let v = view.read(cx);
                     if v.exited() {
@@ -14008,11 +14028,11 @@ impl MuxalApp {
                             }
                         };
                         let (bg, fg) = if reconnecting {
-                            (cx.theme().warning.opacity(0.15), cx.theme().warning)
+                            (term_warning.opacity(0.15), term_warning)
                         } else if abnormal {
-                            (cx.theme().danger.opacity(0.15), cx.theme().danger)
+                            (term_danger.opacity(0.15), term_danger)
                         } else {
-                            (cx.theme().muted.opacity(0.5), cx.theme().muted_foreground)
+                            (zones.terminal_ansi[0].opacity(0.5), zones.terminal_muted())
                         };
                         let hint = if reconnecting {
                             t("Waiting for the host…")
@@ -14040,9 +14060,7 @@ impl MuxalApp {
                                     .bg(bg)
                                     .text_color(fg)
                                     .child(label)
-                                    .child(
-                                        div().text_color(cx.theme().muted_foreground).child(hint),
-                                    ),
+                                    .child(div().text_color(zones.terminal_muted()).child(hint)),
                             )
                             .into_any_element()
                     } else if !v.has_visible_content() {
@@ -14088,20 +14106,20 @@ impl MuxalApp {
                         .p_4()
                         .child(
                             div()
-                                .text_color(cx.theme().muted_foreground)
+                                .text_color(zones.terminal_muted())
                                 .child(t("(terminal failed to start)")),
                         )
                         .child(
                             div()
                                 .text_xs()
-                                .text_color(cx.theme().danger)
+                                .text_color(term_danger)
                                 .max_w(px(560.))
                                 .child(err.clone()),
                         )
                         .child(
                             div()
                                 .text_xs()
-                                .text_color(cx.theme().muted_foreground)
+                                .text_color(zones.terminal_muted())
                                 .child(t("Restart to retry")),
                         )
                         .into_any_element()
@@ -14113,9 +14131,9 @@ impl MuxalApp {
                 // selection. The active card gets an accent ring + glow.
                 let accent = cx.theme().primary;
                 let inactive = match self.settings.pane_border.as_str() {
-                    "off" => cx.theme().background,
+                    "off" => zones.floor,
                     "bold" => cx.theme().muted_foreground,
-                    _ => cx.theme().border,
+                    _ => zones.idle_border,
                 };
                 let drop_hl = accent.opacity(0.4);
 
@@ -14132,10 +14150,10 @@ impl MuxalApp {
                     .collect();
 
                 let inst = self.workspace.instance(iid);
-                let header_bg = if is_active {
-                    cx.theme().title_bar
+                let (header_bg, header_text) = if is_active {
+                    (zones.focused_header, zones.focused_header_text)
                 } else {
-                    cx.theme().secondary
+                    (zones.idle_header, zones.idle_header_text)
                 };
 
                 // Right-aligned, pane-level controls (act on the shown tab). A
@@ -14143,6 +14161,11 @@ impl MuxalApp {
                 // tab drag or focus change.
                 let sid = iid.simple();
                 let kind = inst.map(|i| i.kind).unwrap_or_default();
+                let shown_surface = if kind == InstanceKind::Terminal {
+                    zones.terminal_background
+                } else {
+                    cx.theme().background
+                };
                 // Strip content scales with the tab-strip height setting: text,
                 // padding and dots continuously (rems), buttons/icons in size
                 // steps ([`Self::strip_btn_size`]). `su` folds in the UI zoom so
@@ -14340,13 +14363,23 @@ impl MuxalApp {
                         let tab_wt_id = self.workspace.instance(tab).and_then(|i| i.worktree_id);
                         let tab_is_terminal = self.workspace.instance(tab).map(|i| i.kind)
                             == Some(InstanceKind::Terminal);
+                        // The active pill joins its pane's surface, so anything
+                        // drawn on a terminal's pill uses the terminal's colors.
+                        let pill_on_terminal = tab_active && tab_is_terminal;
+                        let pill_icon = if pill_on_terminal {
+                            zones.terminal_muted()
+                        } else {
+                            header_text
+                        };
                         let tab_resumable = tab_is_terminal && self.resume_capable(tab);
                         let tab_pinned = self
                             .workspace
                             .instance(tab)
                             .map(|i| i.pinned)
                             .unwrap_or(false);
-                        let pill_bg = if tab_active {
+                        let pill_bg = if pill_on_terminal {
+                            zones.terminal_background
+                        } else if tab_active {
                             cx.theme().background
                         } else {
                             header_bg
@@ -14406,10 +14439,12 @@ impl MuxalApp {
                         };
                         pill.bg(pill_bg)
                             .text_xs()
-                            .text_color(if tab_active {
+                            .text_color(if pill_on_terminal {
+                                zones.terminal_foreground
+                            } else if tab_active {
                                 cx.theme().foreground
                             } else {
-                                cx.theme().muted_foreground
+                                header_text
                             })
                             .cursor_pointer()
                             // Click switches to this tab.
@@ -14642,15 +14677,11 @@ impl MuxalApp {
                                     svg()
                                         .path("icons/spider.svg")
                                         .size(px(12.0 * su))
-                                        .text_color(cx.theme().muted_foreground)
+                                        .text_color(pill_icon)
                                         .into_any_element()
                                 } else {
-                                    agent_icon(
-                                        tab_program.as_deref(),
-                                        px(12.0 * su),
-                                        cx.theme().muted_foreground,
-                                    )
-                                    .into_any_element()
+                                    agent_icon(tab_program.as_deref(), px(12.0 * su), pill_icon)
+                                        .into_any_element()
                                 },
                             )
                             // A tab in a worktree always shows its color dot.
@@ -14667,7 +14698,7 @@ impl MuxalApp {
                                     .path("icons/pin.svg")
                                     .size(px(10.0 * su))
                                     .flex_none()
-                                    .text_color(cx.theme().muted_foreground)
+                                    .text_color(pill_icon)
                             }))
                             .child(
                                 div()
@@ -14685,21 +14716,31 @@ impl MuxalApp {
                                     .on_mouse_down(MouseButton::Left, |_, _, cx| {
                                         cx.stop_propagation()
                                     })
-                                    .child(
-                                        Button::new(SharedString::from(format!(
+                                    .child({
+                                        let close = Button::new(SharedString::from(format!(
                                             "tabx-{}",
                                             tab.simple()
                                         )))
-                                        .ghost()
                                         .with_size(sz)
                                         .icon(IconName::Close)
                                         .tooltip(t("Close tab"))
-                                        .on_click(
-                                            cx.listener(move |this, _e, window, cx| {
-                                                this.request_close_instance(tab, Some(window), cx)
-                                            }),
-                                        ),
-                                    ),
+                                        .on_click(cx.listener(move |this, _e, window, cx| {
+                                            this.request_close_instance(tab, Some(window), cx)
+                                        }));
+                                        // A ghost button's color assumes the app's
+                                        // surface, not an opposite-brightness terminal.
+                                        if pill_on_terminal && zones.terminal_inverted {
+                                            let fg = zones.terminal_foreground;
+                                            close.custom(
+                                                ButtonCustomVariant::new(cx)
+                                                    .foreground(fg)
+                                                    .hover(fg.opacity(0.14))
+                                                    .active(fg.opacity(0.22)),
+                                            )
+                                        } else {
+                                            close.ghost()
+                                        }
+                                    }),
                             )
                             .into_any_element()
                     })
@@ -14772,7 +14813,7 @@ impl MuxalApp {
                     .items_center()
                     .bg(header_bg)
                     .text_size(rems(0.75 * strip_scale))
-                    .text_color(cx.theme().muted_foreground)
+                    .text_color(header_text)
                     .cursor_pointer()
                     // Drag the title bar to move the whole pane (→ swap on drop).
                     .on_drag(DragPane { anchor }, move |_, offset, _, cx| {
@@ -14882,7 +14923,7 @@ impl MuxalApp {
                         (true, None) => accent,
                         (false, None) => inactive,
                     })
-                    .bg(cx.theme().background)
+                    .bg(shown_surface)
                     .hover(move |s| s.border_color(wt_color.unwrap_or(accent)))
                     // Drop a dragged tab here → strip slot / center tabify / edge split.
                     .on_drop::<DragInstance>(cx.listener(move |this, p: &DragInstance, w, cx| {
@@ -16933,7 +16974,11 @@ impl MuxalApp {
                             .children(inst.is_none_or(|i| i.kind != InstanceKind::Spider).then(
                                 || {
                                     div().flex_none().child(if loading {
-                                        status_tag(AgentStatus::Working, t("loading").to_string())
+                                        status_tag(
+                                            AgentStatus::Working,
+                                            t("loading").to_string(),
+                                            cx,
+                                        )
                                     } else {
                                         status_tag(
                                             status,
@@ -16947,6 +16992,7 @@ impl MuxalApp {
                                             .unwrap_or_else(|| {
                                                 status_label(Some(status)).to_string()
                                             }),
+                                            cx,
                                         )
                                     })
                                 },
@@ -22042,7 +22088,7 @@ impl Render for MuxalApp {
             // Focus target for "deselect pane": focusing this (a non-Terminal
             // context) routes muxal shortcuts (incl. Ctrl+P) to the root handlers.
             .track_focus(&self.focus_handle)
-            .bg(cx.theme().background)
+            .bg(crate::theme::zones(cx).floor)
             .text_color(cx.theme().foreground);
         let root = self.attach_workspace_actions(root, cx);
         let root = root
