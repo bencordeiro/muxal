@@ -267,29 +267,38 @@ add a new `##` category if none fits).
 
 ## Where things stand (update this section when it changes)
 
-**v0.5.7 published (2026-11-09), verification follow-up:** The owner approved
-handoff/reliability and theme work and requested the combined release. Tag
-`v0.5.7` points to `2e484e3`; all native release/package jobs succeeded. All ten
-published checksums pass, the Linux binary reports 0.5.7 with resolving libraries
-and GLIBC 2.35, both .deb versions are 0.5.7-1, and the universal Mac bundle has
-both architectures and both 0.5.7 version fields. Release notes match CHANGELOG.
-The initial macOS 14 runner was retired; CI/release now use macOS 15.
+**v0.5.7 published; Mac shutdown follow-up verified (2026-11-09):** The
+owner approved handoff/reliability and theme work and requested the release.
+Published tag `v0.5.7` remains at `2e484e3`. All native release/package jobs
+succeeded; all ten downloaded checksums pass. The published Linux binary reports
+0.5.7, resolves libraries, and retains GLIBC 2.35; both .deb versions are 0.5.7-1.
+The universal Mac bundle has both architectures and both version fields at 0.5.7.
+Release notes match CHANGELOG. Atomic promotion installed 0.5.7 and refreshed the
+launcher; the owner restarts their windows themselves. Never restart them.
 
-Linux CI passed. Mac CI exposed an incorrect three-second deadline in the new
-full-queue shutdown test, shorter than the intentional five-second child cleanup
-grace period. The follow-up changes only the test: explicitly ignore hangup,
-wait for a full queue, assert immediate channel closure, and allow eight seconds
-for reaping. The local gate still passes 638 tests (one ignored); native CI must
-confirm the fix. Do not retag or republish 0.5.7 for this test-only correction.
-The interrupted release session had left installed main at 0.5.6. The follow-up
-completed `scripts/promote.sh`: installed main now reports 0.5.7, with the launcher
-refreshed. The owner restarts their windows themselves; never restart them.
-The eight-second version of the full-queue test also failed on Mac; the earlier
-assumption that this was only a short deadline was incomplete. Investigation now
-adds test-only reader phase reporting and a manual macOS terminal diagnostics
-workflow (Intel or Apple Silicon) to locate the stall. Do not claim Mac shutdown
-is verified until native regressions pass. The
-published tag and packages are unchanged by the test-only fix.
+**Actual Mac fix is on master, not in the published v0.5.7 packages:** Initial
+Mac CI exposed a three-second shutdown-test deadline shorter than its five-second
+cleanup grace. Extending that deadline was insufficient: native tracing located
+a real saturated-PTY stall after SIGKILL while a session retained the master.
+Commit `d03c4e1` pins a flush handle only during bounded closed-pane cleanup and
+discards pending PTY data after forced termination, allowing the BSD writer to
+exit and be reaped. Live streams never flush; finished panes retain no reader fd.
+
+Verification is complete for that code commit: full CI run `42665411542` passed
+all Linux x86/ARM, native Intel Mac, lint, i18n, and installer checks. Native Mac
+runs 631 active tests, zero failures (one ignored); the local Linux gate passes
+638 active tests and isolated-HOME launch smoke. Native terminal diagnostic run
+`42665485351` also passes the exact regression and all 131 terminal tests, with
+the same eight-second deadline that failed before the runtime fix. Routine CI
+uses `macos-15-intel` to avoid recurring Apple Silicon hosted-runner allocation
+failures. On-demand terminal diagnostics retain both runner choices; universal
+release builds still cover both Mac architectures.
+
+Verification notes are recorded on `dev/shell-agent-handoffs` so master remains
+at the verified code commit. No new version/tag/release or promotion includes
+this follow-up yet. The owner controls the decision to ship a corrective patch;
+never move the published v0.5.7 tag. Cross-harness end-to-end handoff coverage and
+manual native Mac GUI/playback review remain unverified.
 
 - Shell handoffs recognize Codex, Antigravity (`agy`), Claude, OpenCode, and Pi
   started inside Shell panes. Preparation/start recheck foreground process and
