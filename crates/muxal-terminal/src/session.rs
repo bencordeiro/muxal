@@ -71,12 +71,29 @@ pub(crate) enum ProfiledPtyChunk {
     },
 }
 
+#[derive(Clone)]
 enum PtyChunkSender {
     Public(async_channel::Sender<PtyChunk>),
     Profiled(async_channel::Sender<ProfiledPtyChunk>),
 }
 
 impl PtyChunkSender {
+    fn close(&self) {
+        match self {
+            Self::Public(tx) => {
+                tx.close();
+            }
+            Self::Profiled(tx) => {
+                tx.close();
+            }
+        }
+    }
+    fn is_closed(&self) -> bool {
+        match self {
+            Self::Public(tx) => tx.is_closed(),
+            Self::Profiled(tx) => tx.is_closed(),
+        }
+    }
     fn carries_timing(&self) -> bool {
         matches!(self, Self::Profiled(_))
     }
@@ -354,6 +371,9 @@ pub struct TerminalSession {
     /// resolving relative file paths on ctrl+click. Remote panes run `ssh`
     /// locally with no cwd set, so their relative paths stay unresolvable.
     cwd: Option<std::path::PathBuf>,
+    output_sender: PtyChunkSender,
+    #[cfg(unix)]
+    reader_wake: Arc<ReaderWake>,
     /// The link span under a ctrl+hover, if any; the element paints an underline
     /// over it and shows a pointing-hand cursor (mirrors the `search` pattern).
     hovered_link: Mutex<Option<HoveredLink>>,
@@ -494,7 +514,7 @@ impl TerminalSession {
         cols: u16,
         rows: u16,
     ) -> Result<(Arc<Self>, async_channel::Receiver<PtyChunk>)> {
-        let (tx, rx) = async_channel::unbounded();
+        let (tx, rx) = async_channel::bounded(4);
         let session = Self::spawn_inner(spec, cols, rows, None, PtyChunkSender::Public(tx))?;
         Ok((session, rx))
     }
@@ -506,7 +526,7 @@ impl TerminalSession {
         rows: u16,
         instance_id: uuid::Uuid,
     ) -> Result<(Arc<Self>, async_channel::Receiver<PtyChunk>)> {
-        let (tx, rx) = async_channel::unbounded();
+        let (tx, rx) = async_channel::bounded(4);
         let session = Self::spawn_inner(
             spec,
             cols,
@@ -523,7 +543,7 @@ impl TerminalSession {
         rows: u16,
         instance_id: Option<uuid::Uuid>,
     ) -> Result<(Arc<Self>, async_channel::Receiver<ProfiledPtyChunk>)> {
-        let (tx, rx) = async_channel::unbounded();
+        let (tx, rx) = async_channel::bounded(4);
         let session =
             Self::spawn_inner(spec, cols, rows, instance_id, PtyChunkSender::Profiled(tx))?;
         Ok((session, rx))
@@ -536,6 +556,12 @@ impl TerminalSession {
         instance_id: Option<uuid::Uuid>,
         tx: PtyChunkSender,
     ) -> Result<Arc<Self>> {
+        if let Some(cwd) = &spec.cwd {
+            anyhow::ensure!(
+                std::path::Path::new(cwd).is_dir(),
+                "Terminal working directory is missing or inaccessible: {cwd}"
+            );
+        }
         let cols = cols.max(1);
         let rows = rows.max(1);
 
@@ -619,7 +645,14 @@ impl TerminalSession {
         let setup_started = std::time::Instant::now();
         let child_pid = child.process_id();
         let killer = child.clone_killer();
+        #[cfg(not(unix))]
         let reader = pair.master.try_clone_reader().context("clone pty reader")?;
+        #[cfg(unix)]
+        let (reader, reader_wake) = interruptible_reader(
+            pair.master
+                .as_raw_fd()
+                .context("PTY has no file descriptor")?,
+        )?;
         // PTY writes go through a dedicated thread — NEVER synchronously from
         // the caller. When a busy agent stops draining stdin (e.g. an Ink TUI
         // deep in its render debounce under key-repeat), conhost stops reading
@@ -683,6 +716,7 @@ impl TerminalSession {
         let reply_palette = palette.clone();
         let profile_reads =
             tx.carries_timing() && instance_id.is_some() && crate::profile::is_enabled();
+        let output_sender = tx.clone();
         let reader_handle = std::thread::Builder::new()
             .name("muxal-pty-reader".to_string())
             .spawn(move || {
@@ -745,6 +779,9 @@ impl TerminalSession {
             }),
             search: Mutex::new(Vec::new()),
             cwd,
+            output_sender,
+            #[cfg(unix)]
+            reader_wake,
             hovered_link: Mutex::new(None),
             pointer_hit: Mutex::new(None),
             last_output: Mutex::new(Instant::now()),
@@ -1443,6 +1480,21 @@ impl TerminalSession {
         self.child_pid
     }
 
+    /// The process-group leader currently receiving input from this terminal.
+    pub fn foreground_pid(&self) -> Option<u32> {
+        #[cfg(unix)]
+        {
+            self.master
+                .lock()
+                .process_group_leader()
+                .and_then(|pid| u32::try_from(pid).ok())
+        }
+        #[cfg(not(unix))]
+        {
+            None
+        }
+    }
+
     /// Drain the OSC-52 copies parsed since the last call. The view lands them
     /// on the system clipboard (this crate has no gpui context of its own here).
     pub(crate) fn take_clipboard_stores(&self) -> Vec<(ClipboardType, String)> {
@@ -1501,6 +1553,9 @@ impl TerminalSession {
 
     /// Kill the child process.
     pub fn kill(&self) {
+        self.output_sender.close();
+        #[cfg(unix)]
+        self.reader_wake.close();
         let _ = self.killer.lock().kill();
     }
 
@@ -1963,10 +2018,89 @@ fn appimage_env_fixups(
     (drop, overrides)
 }
 
+/// A poller notification wakes an idle reader without a pipe that another
+/// concurrently spawned child could inherit. The owned duplicate stays alive
+/// until it has been deregistered from the poller.
+#[cfg(unix)]
+struct ReaderWake {
+    poller: Arc<polling::Poller>,
+    closed: AtomicBool,
+}
+#[cfg(unix)]
+impl ReaderWake {
+    fn close(&self) {
+        self.closed.store(true, Ordering::Release);
+        let _ = self.poller.notify();
+    }
+}
+#[cfg(unix)]
+struct WakeReader {
+    file: std::fs::File,
+    wake: Arc<ReaderWake>,
+}
+#[cfg(unix)]
+impl Read for WakeReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let mut events = polling::Events::new();
+        loop {
+            if self.wake.closed.load(Ordering::Acquire) {
+                return Ok(0);
+            }
+            self.wake
+                .poller
+                .modify(&self.file, polling::Event::readable(1))?;
+            self.wake.poller.wait(&mut events, None)?;
+            if self.wake.closed.load(Ordering::Acquire) {
+                return Ok(0);
+            }
+            if events.iter().any(|event| event.key == 1) {
+                return match self.file.read(buf) {
+                    // Unix PTY masters report EIO when their final slave closes,
+                    // matching portable-pty's reader EOF normalization.
+                    Err(error) if error.raw_os_error() == Some(libc::EIO) => Ok(0),
+                    result => result,
+                };
+            }
+            events.clear();
+        }
+    }
+}
+#[cfg(unix)]
+impl Drop for WakeReader {
+    fn drop(&mut self) {
+        let _ = self.wake.poller.delete(&self.file);
+    }
+}
+#[cfg(unix)]
+fn interruptible_reader(fd: std::os::fd::RawFd) -> Result<(Box<dyn Read + Send>, Arc<ReaderWake>)> {
+    use std::os::fd::FromRawFd;
+    // SAFETY: duplicate the live master descriptor atomically close-on-exec;
+    // ownership of the resulting descriptor moves into File exactly once.
+    let dup = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
+    if dup < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    let file = unsafe { std::fs::File::from_raw_fd(dup) };
+    let wake = Arc::new(ReaderWake {
+        poller: Arc::new(polling::Poller::new()?),
+        closed: AtomicBool::new(false),
+    });
+    // SAFETY: WakeReader deregisters the source before closing the owned File.
+    unsafe {
+        wake.poller.add(&file, polling::Event::readable(1))?;
+    }
+    Ok((
+        Box::new(WakeReader {
+            file,
+            wake: wake.clone(),
+        }),
+        wake,
+    ))
+}
+
 impl Drop for TerminalSession {
     fn drop(&mut self) {
-        // Best-effort: kill the child so the reader thread sees EOF and exits.
-        let _ = self.killer.lock().kill();
+        self.kill();
     }
 }
 
@@ -2032,6 +2166,7 @@ fn read_loop(
     // The reader's master-fd dup is no longer needed; free it before the
     // (potentially long) reap below so closed sessions don't hold PTYs open.
     drop(reader);
+    ui_gone |= tx.is_closed();
     // Fast bounded poll for the exit status, so a prompt exit reports its code
     // with the Exit event. None after the window means the code is unknown *so
     // far* (e.g. the PTY closed before the process finished dying).
@@ -2054,14 +2189,27 @@ fn read_loop(
     }
     if !ui_gone {
         tx.send_exit(code, signal.clone(), read_error);
+        tx.close();
     }
     // Keep waiting until the child is actually reaped. A child that outlives
     // its PTY (daemonized, or slow to die after a kill) parks this thread at a
     // 1s cadence instead of leaving a permanent zombie when it finally exits;
     // the thread costs nothing while sleeping and dies with the process.
     if code.is_none() {
+        #[cfg(unix)]
+        let cleanup_started = Instant::now();
         while let Ok(None) = child.try_wait() {
-            std::thread::sleep(Duration::from_secs(1));
+            #[cfg(unix)]
+            if ui_gone
+                && cleanup_started.elapsed() >= Duration::from_secs(5)
+                && let Some(pid) = child.process_id()
+            {
+                // This unreaped child still owns its PID; never signal a reused PID.
+                unsafe {
+                    libc::kill(pid as i32, libc::SIGKILL);
+                }
+            }
+            std::thread::sleep(Duration::from_millis(100));
         }
     }
 }
@@ -2584,6 +2732,106 @@ mod tests {
     use alacritty_terminal::grid::Dimensions;
     use alacritty_terminal::index::{Column, Line, Point as GridPoint};
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn closing_an_idle_reader_reaps_a_child_that_ignores_hangup() {
+        let (session, rx) = TerminalSession::spawn(
+            CommandSpec::program(
+                "/bin/sh",
+                vec![
+                    "-c".into(),
+                    "trap '' HUP; printf READY; while :; do sleep 1; done".into(),
+                ],
+            ),
+            80,
+            24,
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Ok(PtyChunk::Output(bytes)) = rx.try_recv()
+                && bytes.windows(5).any(|part| part == b"READY")
+            {
+                break;
+            }
+            assert!(Instant::now() < deadline, "child did not become ready");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        session.kill();
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while !session._reader.is_finished() {
+            assert!(
+                Instant::now() < deadline,
+                "idle reader or ignored-hangup child survived cleanup"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(rx.is_closed());
+    }
+
+    #[test]
+    fn missing_working_directory_refuses_launch() {
+        let missing = std::env::temp_dir().join(format!("muxal-missing-{}", Uuid::new_v4()));
+        assert!(
+            TerminalSession::spawn(
+                CommandSpec::program("/bin/sh", vec![]).with_cwd(missing.display().to_string()),
+                80,
+                24
+            )
+            .is_err()
+        );
+        assert!(!missing.exists());
+    }
+
+    #[test]
+    fn bounded_stream_preserves_bytes_and_exit_order() {
+        let (session, rx) = TerminalSession::spawn(
+            CommandSpec::program(
+                "/bin/sh",
+                vec!["-c".into(), "head -c 1048576 /dev/zero; printf END".into()],
+            ),
+            80,
+            24,
+        )
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(rx.len() <= 4);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut output = Vec::new();
+        loop {
+            match rx.try_recv() {
+                Ok(PtyChunk::Output(bytes)) => output.extend(bytes),
+                Ok(PtyChunk::Exit { .. }) => break,
+                Err(async_channel::TryRecvError::Empty) => {
+                    assert!(Instant::now() < deadline);
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("exit event missing: {error}"),
+            }
+        }
+        assert_eq!(output.len(), 1048579);
+        assert!(output[..1048576].iter().all(|b| *b == 0));
+        assert_eq!(&output[1048576..], b"END");
+        drop(session);
+    }
+
+    #[test]
+    fn closing_a_full_queue_unblocks_reader_even_if_receiver_is_retained() {
+        let (session, rx) = TerminalSession::spawn(
+            CommandSpec::program("/bin/sh", vec!["-c".into(), "exec yes".into()]),
+            80,
+            24,
+        )
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+        session.kill();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !session._reader.is_finished() {
+            assert!(Instant::now() < deadline, "reader blocked after close");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(rx.is_closed());
+    }
 
     #[test]
     fn large_multiline_startup_prompt_reaches_the_pty_in_one_paste() {

@@ -106,8 +106,41 @@ impl RepoLoc {
 }
 
 /// Run `git <args>` at a [`RepoLoc`]: `git -C <path> …`.
+fn git_read_command() -> Command {
+    let mut cmd = command("git");
+    cmd.env("GIT_OPTIONAL_LOCKS", "0")
+        .args(["-c", "diff.autoRefreshIndex=false"]);
+    cmd
+}
+
 fn git_output(loc: &RepoLoc, args: &[&str]) -> std::io::Result<std::process::Output> {
-    command("git").arg("-C").arg(loc.path()).args(args).output()
+    if loc.path().as_os_str().is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Repository path is missing",
+        ));
+    }
+
+    let mut cmd = command("git");
+    if (args.first() == Some(&"branch") && args.get(1) == Some(&"--format=%(refname:short)"))
+        || args.first().is_some_and(|arg| {
+            matches!(
+                *arg,
+                "status"
+                    | "diff"
+                    | "rev-list"
+                    | "rev-parse"
+                    | "log"
+                    | "show"
+                    | "ls-files"
+                    | "check-ignore"
+            )
+        })
+    {
+        cmd.env("GIT_OPTIONAL_LOCKS", "0")
+            .args(["-c", "diff.autoRefreshIndex=false"]);
+    }
+    cmd.arg("-C").arg(loc.path()).args(args).output()
 }
 
 /// Every tmux session on this machine. An empty list when no tmux server is
@@ -118,7 +151,13 @@ fn ensure_gitignored(root: &Path, ignore_line: &str) -> Result<()> {
     let ignored = current
         .lines()
         .any(|l| l.trim() == ignore_line || l.trim() == MEMORY_DIR);
-    if ignored {
+    if ignored
+        || git_output(
+            &RepoLoc::new(root),
+            &["check-ignore", "-q", "--", ignore_line],
+        )
+        .is_ok_and(|out| out.status.success())
+    {
         return Ok(());
     }
     let mut next = current;
@@ -204,7 +243,7 @@ fn git_run_loc(loc: &RepoLoc, args: &[&str]) -> Result<String> {
 
 /// Whether `path` is inside a git working tree.
 pub fn is_git_repo(path: &Path) -> bool {
-    command("git")
+    git_read_command()
         .arg("-C")
         .arg(path)
         .args(["rev-parse", "--is-inside-work-tree"])
@@ -231,26 +270,57 @@ pub fn create_worktree(repo: &Path, worktree_path: &Path, branch: &str) -> Resul
     Ok(())
 }
 
-/// Count uncommitted changes in `worktree_path` (staged, unstaged, untracked).
-/// 0 if the path is gone or git fails — callers treat that as "clean".
-pub fn worktree_change_count(worktree_path: &Path) -> usize {
-    if !worktree_path.exists() {
-        return 0;
+/// Display count; destructive callers must use `worktree_state` instead.
+pub fn worktree_change_count(path: &Path) -> usize {
+    checked_change_count(path).unwrap_or(0)
+}
+
+fn checked_change_count(path: &Path) -> Result<usize> {
+    let out = git_output(&RepoLoc::new(path), &["status", "--porcelain=v1", "-z"])?;
+    if !out.status.success() {
+        bail!("{}", String::from_utf8_lossy(&out.stderr));
     }
-    command("git")
-        .arg("-C")
-        .arg(worktree_path)
-        .args(["status", "--porcelain"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .filter(|l| !l.trim().is_empty())
-                .count()
-        })
-        .unwrap_or(0)
+    // Count entries rather than rename source paths in porcelain -z output.
+    let mut entries = out.stdout.split(|b| *b == 0).filter(|v| !v.is_empty());
+    let mut count = 0;
+    while let Some(entry) = entries.next() {
+        count += 1;
+        if entry.first().is_some_and(|b| matches!(b, b'R' | b'C'))
+            || entry.get(1).is_some_and(|b| matches!(b, b'R' | b'C'))
+        {
+            entries.next();
+        }
+    }
+    Ok(count)
+}
+
+/// Both safety checks must succeed before deciding whether cleanup is safe.
+pub fn worktree_state(repo: &Path, path: &Path) -> Result<(usize, usize)> {
+    let changed = checked_change_count(path)?;
+    let base = repo_head(repo).context("Could not read the base repository HEAD")?;
+    let out = git_output(
+        &RepoLoc::new(path),
+        &["rev-list", "--count", &format!("{base}..HEAD")],
+    )?;
+    if !out.status.success() {
+        bail!("{}", String::from_utf8_lossy(&out.stderr));
+    }
+    let unmerged = String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .parse::<usize>()?;
+    Ok((changed, unmerged))
+}
+
+/// Automatic cleanup refuses dirty worktrees and never force-deletes a branch.
+pub fn remove_clean_worktree(repo: &Path, path: &Path, branch: &str) -> Result<()> {
+    let state = worktree_state(repo, path)?;
+    if state != (0, 0) {
+        bail!("Worktree still contains changes or unmerged commits");
+    }
+    let loc = RepoLoc::new(repo);
+    git_run_loc(&loc, &["worktree", "remove", &path.to_string_lossy()])?;
+    git_run_loc(&loc, &["branch", "-d", branch])?;
+    Ok(())
 }
 
 /// The repo's current HEAD commit SHA — the base a worktree branch is measured
@@ -268,33 +338,11 @@ pub fn repo_current_branch(loc: &RepoLoc) -> Option<String> {
 /// Run a git command in `dir` and return its trimmed single-line stdout on
 /// success, else `None`.
 fn git_line(dir: &Path, args: &[&str]) -> Option<String> {
-    let out = command("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
+    let out = git_output(&RepoLoc::new(dir), args)
         .ok()
         .filter(|o| o.status.success())?;
     let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
     (!s.is_empty()).then_some(s)
-}
-
-/// Count commits on the worktree's HEAD that are not reachable from `base` (the
-/// main repo's HEAD) — i.e. unmerged work. 0 if the path is gone or git fails;
-/// naturally 0 once the branch has been merged into `base`.
-pub fn worktree_unmerged_count(worktree_path: &Path, base: &str) -> usize {
-    if !worktree_path.exists() {
-        return 0;
-    }
-    command("git")
-        .arg("-C")
-        .arg(worktree_path)
-        .args(["rev-list", "--count", &format!("{base}..HEAD")])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse().ok())
-        .unwrap_or(0)
 }
 
 /// Merge `branch` into whatever is checked out in `repo` (the base). On any
@@ -321,12 +369,12 @@ pub fn merge_worktree_branch(repo: &Path, branch: &str) -> Result<()> {
 
 /// Delete `branch` from `repo` (force). Best-effort — only valid once the branch
 /// is no longer checked out in any worktree.
-pub fn delete_branch(repo: &Path, branch: &str) {
-    let _ = command("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["branch", "-D", branch])
-        .output();
+pub fn delete_branch(repo: &Path, branch: &str) -> Result<()> {
+    git_run_loc(&RepoLoc::new(repo), &["branch", "-D", branch]).map(|_| ())
+}
+
+pub fn delete_merged_branch(repo: &Path, branch: &str) -> Result<()> {
+    git_run_loc(&RepoLoc::new(repo), &["branch", "-d", branch]).map(|_| ())
 }
 
 /// Stage **all** changes (tracked, untracked, and deletions) and commit them at
@@ -571,18 +619,26 @@ pub fn discard_worktree_changes(worktree_path: &Path, base_ref: &str) -> Result<
 }
 
 /// Remove a worktree (force) and prune stale entries. Best-effort.
-pub fn remove_worktree(repo: &Path, worktree_path: &Path) {
-    let _ = command("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["worktree", "remove", "--force"])
-        .arg(worktree_path)
-        .output();
-    let _ = command("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["worktree", "prune"])
-        .output();
+pub fn remove_legacy_clean_worktree(repo: &Path, path: &Path) -> Result<()> {
+    if worktree_state(repo, path)? != (0, 0) {
+        bail!(
+            "Worktree contains changes or unmerged commits: {}",
+            path.display()
+        );
+    }
+    remove_committed_worktree(repo, path)
+}
+
+pub fn remove_committed_worktree(repo: &Path, path: &Path) -> Result<()> {
+    git_run_loc(
+        &RepoLoc::new(repo),
+        &["worktree", "remove", &path.to_string_lossy()],
+    )
+    .map(|_| ())
+}
+
+pub fn remove_worktree(repo: &Path, worktree_path: &Path) -> Result<()> {
+    remove_worktree_loc(&RepoLoc::new(repo), &worktree_path.to_string_lossy()).map(|_| ())
 }
 
 /// Maximum diff text we load into the viewer (bytes), so a giant diff can't
@@ -595,7 +651,7 @@ const MAX_DIFF_BYTES: usize = 2 * 1024 * 1024;
 /// (we can't tell agent-created files from pre-existing ones without a baseline).
 pub fn git_diff(dir: &Path) -> String {
     let git = |args: &[&str]| {
-        command("git")
+        git_read_command()
             .arg("-C")
             .arg(dir)
             .arg("--no-pager")
@@ -805,6 +861,92 @@ mod tests {
     use super::*;
 
     #[test]
+    fn automatic_cleanup_keeps_dirty_unmerged_and_unreadable_worktrees() {
+        let root =
+            std::env::temp_dir().join(format!("muxal-safe-cleanup-{}", uuid::Uuid::new_v4()));
+        let repo = root.join("repo");
+        let wt = root.join("worktree");
+        std::fs::create_dir_all(&repo).unwrap();
+        let git = |dir: &Path, args: &[&str]| {
+            let out = command("git")
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            out
+        };
+        git(&repo, &["init", "-q"]);
+        git(&repo, &["config", "user.email", "test@example.invalid"]);
+        git(&repo, &["config", "user.name", "Test"]);
+        std::fs::write(repo.join("base"), "base").unwrap();
+        git(&repo, &["add", "base"]);
+        git(&repo, &["commit", "-qm", "base"]);
+        create_worktree(&repo, &wt, "test-cleanup").unwrap();
+        std::fs::write(wt.join("valuable"), "keep this").unwrap();
+        assert!(remove_clean_worktree(&repo, &wt, "test-cleanup").is_err());
+        assert!(wt.join("valuable").exists());
+        git(&wt, &["add", "valuable"]);
+        git(&wt, &["commit", "-qm", "work"]);
+        assert!(remove_clean_worktree(&repo, &wt, "test-cleanup").is_err());
+        let index = git(&wt, &["rev-parse", "--git-path", "index"]);
+        let index = PathBuf::from(String::from_utf8(index.stdout).unwrap().trim());
+        let index = if index.is_absolute() {
+            index
+        } else {
+            wt.join(index)
+        };
+        let saved = std::fs::read(&index).unwrap();
+        std::fs::write(&index, "broken index").unwrap();
+        assert!(worktree_state(&repo, &wt).is_err());
+        assert!(remove_clean_worktree(&repo, &wt, "test-cleanup").is_err());
+        assert_eq!(
+            std::fs::read_to_string(wt.join("valuable")).unwrap(),
+            "keep this"
+        );
+        std::fs::write(index, saved).unwrap();
+        merge_worktree_branch(&repo, "test-cleanup").unwrap();
+        git(&repo, &["worktree", "lock", &wt.to_string_lossy()]);
+        assert!(remove_clean_worktree(&repo, &wt, "test-cleanup").is_err());
+        assert!(
+            wt.join("valuable").exists(),
+            "failed removal must retain files"
+        );
+        git(&repo, &["worktree", "unlock", &wt.to_string_lossy()]);
+        remove_clean_worktree(&repo, &wt, "test-cleanup").unwrap();
+        assert!(!wt.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn memory_respects_other_ignore_sources() {
+        let root = std::env::temp_dir().join(format!("muxal-ignore-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        assert!(
+            command("git")
+                .arg("-C")
+                .arg(&root)
+                .args(["init", "-q"])
+                .status()
+                .unwrap()
+                .success()
+        );
+        std::fs::write(root.join(".gitignore"), "target/\n").unwrap();
+        std::fs::write(root.join(".git/info/exclude"), ".muxal/\n").unwrap();
+        ensure_memory_file(&RepoLoc::new(&root)).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join(".gitignore")).unwrap(),
+            "target/\n"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn worktree_create_and_remove() {
         let repo = std::env::temp_dir().join("muxal-it-repo");
         let worktree = std::env::temp_dir().join("muxal-it-worktree");
@@ -836,7 +978,7 @@ mod tests {
             "worktree should be checked out"
         );
 
-        remove_worktree(&repo, &worktree);
+        remove_worktree(&repo, &worktree).unwrap();
         assert!(!worktree.exists(), "worktree should be removed");
 
         let _ = std::fs::remove_dir_all(&repo);
@@ -865,16 +1007,16 @@ mod tests {
         git(&repo, &["commit", "-q", "-m", "init"]);
 
         create_worktree(&repo, &worktree, "muxal/test").expect("create worktree");
-        let base = repo_head(&repo).expect("repo head");
+
         // A fresh worktree has nothing ahead of base.
-        assert_eq!(worktree_unmerged_count(&worktree, &base), 0);
+        assert_eq!(worktree_state(&repo, &worktree).unwrap().1, 0);
 
         // Commit inside the worktree → one unmerged commit, but a clean tree.
         std::fs::write(worktree.join("feature.txt"), "work").unwrap();
         git(&worktree, &["add", "."]);
         git(&worktree, &["commit", "-q", "-m", "feature"]);
         assert_eq!(worktree_change_count(&worktree), 0, "tree should be clean");
-        assert_eq!(worktree_unmerged_count(&worktree, &base), 1);
+        assert_eq!(worktree_state(&repo, &worktree).unwrap().1, 1);
 
         // Merge it into the repo's base branch → the work lands there.
         merge_worktree_branch(&repo, "muxal/test").expect("merge");
@@ -883,12 +1025,12 @@ mod tests {
             "merged file should appear in the base repo"
         );
         // After merging, nothing is unmerged anymore.
-        let base2 = repo_head(&repo).expect("repo head");
-        assert_eq!(worktree_unmerged_count(&worktree, &base2), 0);
+
+        assert_eq!(worktree_state(&repo, &worktree).unwrap().1, 0);
 
         // Cleanup: remove the worktree, then the (now merged) branch.
-        remove_worktree(&repo, &worktree);
-        delete_branch(&repo, "muxal/test");
+        remove_worktree(&repo, &worktree).unwrap();
+        delete_branch(&repo, "muxal/test").unwrap();
         let _ = std::fs::remove_dir_all(&repo);
     }
 

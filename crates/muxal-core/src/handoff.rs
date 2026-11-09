@@ -5,6 +5,20 @@ use std::path::{Path, PathBuf};
 
 pub const MAX_HANDOFF_BYTES: usize = 256 * 1024;
 
+/// Identity of an agent launched inside a shell, used to reject stale handoffs.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ShellSource {
+    pub pid: u32,
+    pub identity: String,
+    pub name: String,
+}
+
+impl ShellSource {
+    pub fn matches(&self, pid: u32, identity: &str, name: &str) -> bool {
+        self.pid == pid && self.identity == identity && self.name == name
+    }
+}
+
 // Startup input is normalized to one line by the launch resolver. JSON-escape
 // spaces too, so paths containing repeated spaces survive that normalization.
 fn path_reference(path: &Path) -> String {
@@ -27,6 +41,8 @@ pub struct HandoffRequest {
     /// Captured/reviewed text lives in the workspace document, not loose files.
     #[serde(default)]
     pub summary: Option<String>,
+    #[serde(default)]
+    pub shell_source: Option<ShellSource>,
 }
 
 impl HandoffRequest {
@@ -39,6 +55,7 @@ impl HandoffRequest {
             session_id: source.session_id.clone(),
             direction,
             summary: None,
+            shell_source: None,
         }
     }
 
@@ -100,6 +117,9 @@ impl HandoffRequest {
         instance.injection = InjectionMode::TypeIn;
         instance.handoff_id = Some(self.id);
         instance.handoff_inline = true;
+        // Keep the exact directory through subsequent handoffs too, including
+        // an agent originally opened from a subdirectory of a worktree.
+        instance.cwd_override = Some(self.cwd.clone());
         instance
     }
 }
@@ -268,6 +288,39 @@ mod tests {
         assert!(!input.contains("reviewed.md"));
         assert!(!input.contains("JSON-quoted path"));
         assert!(recipient.handoff_inline);
+    }
+
+    #[test]
+    fn shell_handoff_preserves_process_identity_and_recipient_directory() {
+        let preset = AgentPreset::codex();
+        let source = Instance::shell(Uuid::new_v4());
+        let mut request = HandoffRequest::new(&source, "/repo/subdir".into(), String::new());
+        request.shell_source = Some(super::ShellSource {
+            pid: 42,
+            identity: "boot:123".into(),
+            name: "codex".into(),
+        });
+        let serialized = serde_json::to_string(&request).unwrap();
+        let restored: HandoffRequest = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(restored.shell_source, request.shell_source);
+        let identity = restored.shell_source.as_ref().unwrap();
+        assert!(identity.matches(42, "boot:123", "codex"));
+        assert!(!identity.matches(43, "boot:123", "codex"));
+        assert!(!identity.matches(42, "boot:124", "codex"));
+        assert!(!identity.matches(42, "boot:123", "pi"));
+        assert!(restored.matches_source(&source, Path::new("/repo/subdir")));
+        assert!(!restored.matches_source(&source, Path::new("/repo/other")));
+        let recipient = restored.recipient(&preset, "Review this task");
+        assert_eq!(
+            recipient.cwd_override.as_deref(),
+            Some(Path::new("/repo/subdir"))
+        );
+        assert!(!recipient.use_worktree);
+        assert!(recipient.worktree_path.is_none());
+        let mut old = serde_json::to_value(&request).unwrap();
+        old.as_object_mut().unwrap().remove("shell_source");
+        let legacy: HandoffRequest = serde_json::from_value(old).unwrap();
+        assert!(legacy.shell_source.is_none());
     }
 
     #[test]

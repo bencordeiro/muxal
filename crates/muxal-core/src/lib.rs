@@ -528,6 +528,9 @@ pub struct Instance {
     /// Worktree directory, once created (becomes this instance's working dir).
     #[serde(default)]
     pub worktree_path: Option<std::path::PathBuf>,
+    /// Explicit agent working directory, independent of its worktree root.
+    #[serde(default)]
+    pub cwd_override: Option<std::path::PathBuf>,
     /// Branch checked out in the worktree.
     #[serde(default)]
     pub worktree_branch: Option<String>,
@@ -647,6 +650,7 @@ impl Instance {
             tmux_session: None,
             grid: None,
             worktree_path: None,
+            cwd_override: None,
             worktree_branch: None,
             auto_mode_presses: 0,
             is_runner: false,
@@ -710,6 +714,7 @@ impl Instance {
             tmux_session: None,
             grid: None,
             worktree_path: None,
+            cwd_override: None,
             worktree_branch: None,
             auto_mode_presses: 0,
             is_runner: false,

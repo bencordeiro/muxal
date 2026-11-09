@@ -6,6 +6,37 @@ publish the matching version section; older releases remain available on the
 
 ## Unreleased
 
+### Fixed
+
+- Keep worktrees and their registry entries when Git safety checks or removal
+  fail. Automatic cleanup refuses dirty worktrees and uses non-forced branch
+  deletion; commit/merge cleanup refuses newly written uncommitted files.
+- Preserve word/line deletion for modified Backspace, including when the
+  platform supplies a character for the key.
+- Refuse terminal launch when its working directory is missing or inaccessible,
+  avoiding a silent fallback to the home directory.
+- Exclude recognizable Claude and Codex prompt drafts from status markers and
+  recognize additional Claude permission forms without changing the compact
+  input badge or Pi lifecycle binding.
+- Respect Git excludes before appending the shared-memory directory to .gitignore.
+
+### Performance
+
+- Cache branch/program discovery against input metadata with a 60-second
+  fallback, refresh worktree counts every ten seconds, and prevent overlapping
+  worktree diff refreshes. Display Git reads avoid optional index writes.
+- Bound each terminal output queue to four 64-KiB chunks, preserving output and
+  exit order while open. Closing a pane wakes blocked senders and idle Unix
+  readers; a closed pane's unreaped Unix child is force-killed after its grace
+  period if it ignores hangup. Query replies still run before queue admission.
+
+### Changed
+
+- Manual handoffs now recognize Codex, Antigravity, Claude, OpenCode, and Pi
+  started inside Shell panes on Linux and macOS. The new pane uses the agent's
+  actual working directory and preserves known worktree identity. Muxal checks
+  the foreground process and directory before sending and starting the handoff.
+
 ## v0.5.6 — 2026-10-20
 
 ### Added

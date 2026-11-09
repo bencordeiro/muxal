@@ -4525,6 +4525,7 @@ dependencies = [
  "log",
  "muxal-core",
  "parking_lot",
+ "polling",
  "portable-pty",
  "serde_json",
  "uuid",

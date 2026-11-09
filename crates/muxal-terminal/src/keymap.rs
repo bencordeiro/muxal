@@ -58,6 +58,17 @@ pub fn key_to_bytes(
         return Some(b"\t".to_vec());
     }
 
+    if key == "backspace" {
+        return Some(if mods.platform {
+            vec![0x15]
+        } else if mods.control {
+            vec![0x17]
+        } else if mods.alt {
+            vec![0x1b, 0x7f]
+        } else {
+            vec![0x7f]
+        });
+    }
     match key {
         "enter" | "return" | "kp_enter" => {
             // Shift/Alt+Enter → ESC CR. Bare CR cannot carry modifiers, so
@@ -103,7 +114,6 @@ pub fn key_to_bytes(
     }
 
     match key {
-        "backspace" => return Some(b"\x7f".to_vec()),
         "escape" => return Some(b"\x1b".to_vec()),
         "home" => {
             if modifier_code > 1 {
@@ -174,6 +184,27 @@ mod tests {
             shift,
             alt,
             platform: false,
+        }
+    }
+
+    #[test]
+    fn modified_backspace_preserves_editing_intent_even_with_key_char() {
+        for (modifiers, expected) in [
+            (mods(false, false, false), vec![0x7f]),
+            (mods(false, true, false), vec![0x1b, 0x7f]),
+            (mods(false, false, true), vec![0x17]),
+            (
+                KeyModifiers {
+                    platform: true,
+                    ..KeyModifiers::default()
+                },
+                vec![0x15],
+            ),
+        ] {
+            assert_eq!(
+                key_to_bytes("backspace", Some("\x7f"), &modifiers, false),
+                Some(expected)
+            );
         }
     }
 

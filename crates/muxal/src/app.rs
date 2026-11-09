@@ -7,6 +7,7 @@ mod handoffs;
 mod keybindings;
 mod music;
 mod spider;
+mod status_probes;
 
 use crate::editor::{
     DiskChange, DiskStamp, EditorConfig, EditorView, ExternalChange, read_disk_change,
@@ -2142,6 +2143,7 @@ pub struct MuxalApp {
     project_branch_lists: HashMap<Uuid, Vec<String>>,
     /// Prevent slow git probes from accumulating overlapping one-second refresh jobs.
     status_refresh_in_flight: bool,
+    status_probe_cache: status_probes::Cache,
     /// Parent-owned Codex thread names, keyed by the session UUID captured from
     /// that pane. Refreshed from Codex's append-only session index.
     codex_session_names: HashMap<String, String>,
@@ -4172,6 +4174,7 @@ impl MuxalApp {
             project_branches: HashMap::new(),
             project_branch_lists: HashMap::new(),
             status_refresh_in_flight: false,
+            status_probe_cache: status_probes::Cache::default(),
             codex_session_names: HashMap::new(),
             worktree_changes: HashMap::new(),
             gh_available: program_on_path("gh"),
@@ -4450,8 +4453,9 @@ impl MuxalApp {
             preset.resume_flag.as_ref()?;
             let project = self.workspace.project(inst.project_id);
             let cwd = inst
-                .worktree_path
+                .cwd_override
                 .clone()
+                .or_else(|| inst.worktree_path.clone())
                 .or_else(|| project.map(|project| project.root_path.clone()));
             let local = project.is_some();
             (preset.clone(), cwd, local)
@@ -4590,7 +4594,11 @@ impl MuxalApp {
                 // Refer to the file relatively when the agent starts at the project
                 // root: this string ends up in the agent's argv, and an absolute path
                 // there makes every pane of the project match `pkill -f <project>`.
-                let cwd = i.worktree_path.as_ref().map(|w| w.display().to_string());
+                let cwd = i
+                    .cwd_override
+                    .as_ref()
+                    .or(i.worktree_path.as_ref())
+                    .map(|w| w.display().to_string());
                 let instruction = memory_instruction(&memory_reference(&root, cwd.as_deref()));
                 add_automatic(instruction, &mut i);
             }
@@ -4681,7 +4689,7 @@ impl MuxalApp {
 
         // Local: worktree path wins as the working dir; otherwise project root.
         let local_cwd: Option<String> = inst
-            .and_then(|i| i.worktree_path.clone())
+            .and_then(|i| i.cwd_override.clone().or_else(|| i.worktree_path.clone()))
             .map(|p| p.display().to_string())
             .or_else(|| project.map(|p| p.root_path.display().to_string()));
         // If this instance uses tmux, wrap the command in `tmux new-session -A`
@@ -6333,6 +6341,9 @@ impl MuxalApp {
 
     /// Refresh each active-project worktree's changed-file list off the UI thread.
     fn refresh_git_diff_worktrees(&mut self, cx: &mut Context<Self>) {
+        if self.git_diff_loading {
+            return;
+        }
         let Some(pid) = self.workspace.active_project else {
             self.git_diff_worktree_files.clear();
             return;
@@ -6350,6 +6361,7 @@ impl MuxalApp {
             return;
         }
         let loc = self.repo_loc(pid);
+        self.git_diff_loading = true;
         cx.spawn(async move |this, cx| {
             let (results, branches): (Vec<(Uuid, Vec<integrations::GitChange>)>, Vec<String>) = cx
                 .background_executor()
@@ -6370,6 +6382,10 @@ impl MuxalApp {
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
+                this.git_diff_loading = false;
+                if this.workspace.active_project != Some(pid) {
+                    return;
+                }
                 this.git_diff_worktree_files = results.into_iter().collect();
                 this.git_diff_branches = branches;
                 cx.notify();
@@ -6527,6 +6543,8 @@ impl MuxalApp {
             return;
         }
         self.status_refresh_in_flight = true;
+        let mut probes = std::mem::take(&mut self.status_probe_cache);
+        let workspace = self.current_workspace;
         let presets = self.presets.clone();
         let locals: Vec<(Uuid, PathBuf)> = self
             .workspace
@@ -6552,34 +6570,50 @@ impl MuxalApp {
             .then(home_dir)
             .flatten();
         cx.spawn(async move |this, cx| {
-            let (available, gh, sshpass, tmux, branches, changes, codex_names) = cx
+            let (available, gh, sshpass, tmux, branches, changes, codex_names, probes) = cx
                 .background_executor()
                 .spawn(async move {
-                    let available = installed_programs(&presets);
-                    let gh = program_on_path("gh");
-                    let sshpass = program_on_path("sshpass");
-                    let tmux = cfg!(unix) && program_on_path("tmux");
+                    probes.retain(
+                        &locals
+                            .iter()
+                            .map(|(_, path)| path.clone())
+                            .collect::<Vec<_>>(),
+                        &worktrees
+                            .iter()
+                            .map(|(_, path)| path.clone())
+                            .collect::<Vec<_>>(),
+                    );
+                    let (available, gh, sshpass, tmux) = probes.programs(&presets);
                     let branches: Vec<(Uuid, Option<String>, Vec<String>)> = locals
                         .into_iter()
                         .map(|(id, root)| {
-                            let loc = integrations::RepoLoc::new(root);
-                            (
-                                id,
-                                integrations::repo_current_branch(&loc),
-                                integrations::list_branches(&loc),
-                            )
+                            let (branch, branches) = probes.branches(&root);
+                            (id, branch, branches)
                         })
                         .collect();
                     let changes: Vec<(Uuid, usize)> = worktrees
                         .into_iter()
-                        .map(|(id, path)| (id, integrations::worktree_change_count(&path)))
+                        .map(|(id, path)| (id, probes.changes(&path)))
                         .collect();
                     let codex_names = codex_home.map(|home| muxal_core::codex_session_names(&home));
-                    (available, gh, sshpass, tmux, branches, changes, codex_names)
+                    (
+                        available,
+                        gh,
+                        sshpass,
+                        tmux,
+                        branches,
+                        changes,
+                        codex_names,
+                        probes,
+                    )
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.status_refresh_in_flight = false;
+                if this.current_workspace != workspace {
+                    return;
+                }
+                this.status_probe_cache = probes;
                 this.available_programs = available;
                 this.gh_available = gh;
                 this.sshpass_available = sshpass;
@@ -6745,8 +6779,9 @@ impl MuxalApp {
                     return None;
                 }
                 let cwd = instance
-                    .worktree_path
+                    .cwd_override
                     .clone()
+                    .or_else(|| instance.worktree_path.clone())
                     .unwrap_or_else(|| project.root_path.clone());
                 Some((instance.id, cwd))
             })
@@ -6776,8 +6811,9 @@ impl MuxalApp {
                     return None;
                 }
                 let cwd = instance
-                    .worktree_path
+                    .cwd_override
                     .clone()
+                    .or_else(|| instance.worktree_path.clone())
                     .unwrap_or_else(|| project.root_path.clone());
                 Some((instance.id, cwd))
             })
@@ -6959,6 +6995,7 @@ impl MuxalApp {
         // quit shortly after `/resume` is unlikely to persist the old binding.
         self.sync_claude_session_ids(cx);
         self.sync_pi_session_ids(cx);
+        self.poll_shell_handoff_agents(cx);
         self.poll_handoffs(cx);
         self.sync_spiders(cx);
         self.sync_grok_session_ids(cx);
@@ -7100,8 +7137,9 @@ impl MuxalApp {
                     .or_else(|| self.presets.iter().find(|p| p.name == inst.preset))?;
                 let project = self.workspace.project(inst.project_id)?;
                 let cwd = inst
-                    .worktree_path
+                    .cwd_override
                     .as_deref()
+                    .or(inst.worktree_path.as_deref())
                     .unwrap_or(project.root_path.as_path());
                 let home = home_dir()?;
                 let candidate =
@@ -8088,6 +8126,9 @@ impl MuxalApp {
     ) {
         match choice {
             WorktreeChoice::New => {
+                if !instance.handoff_inline {
+                    instance.cwd_override = None;
+                }
                 instance.use_worktree = true;
                 self.setup_worktree_into_registry(pid, instance);
             }
@@ -8100,6 +8141,9 @@ impl MuxalApp {
                 }
             }
             WorktreeChoice::Resume(wid) => {
+                if !instance.handoff_inline {
+                    instance.cwd_override = None;
+                }
                 if let Some(w) = self.workspace.worktree(wid) {
                     instance.use_worktree = true;
                     instance.worktree_path = Some(w.path.clone());
@@ -9369,7 +9413,13 @@ impl MuxalApp {
             self.dispose_worktree_if_orphaned(wid, cx);
         } else if let (Some(path), Some(root)) = (worktree_path, root) {
             // Legacy instance (no worktree_id): old direct-removal behavior.
-            integrations::remove_worktree(&root, &path);
+            if let Err(error) = integrations::remove_legacy_clean_worktree(&root, &path) {
+                self.add_event(
+                    NotifKind::Error,
+                    t("Worktree was kept").to_string(),
+                    error.to_string(),
+                );
+            }
         }
     }
 
@@ -9480,6 +9530,19 @@ impl MuxalApp {
     /// When `wid`'s last instance has closed: silently remove a fully-landed
     /// worktree (clean tree + nothing unmerged); otherwise queue the dispose modal
     /// so uncommitted changes / unmerged commits aren't lost silently.
+    fn keep_failed_worktree(&mut self, wid: Uuid, error: &anyhow::Error, cx: &mut Context<Self>) {
+        if let Some(worktree) = self.workspace.worktree_mut(wid) {
+            worktree.detached = true;
+        }
+        self.add_event(
+            NotifKind::Error,
+            t("Worktree was kept").to_string(),
+            error.to_string(),
+        );
+        self.persist();
+        cx.notify();
+    }
+
     fn dispose_worktree_if_orphaned(&mut self, wid: Uuid, cx: &mut Context<Self>) {
         if !self.workspace.instances_using(wid).is_empty() {
             return;
@@ -9487,6 +9550,9 @@ impl MuxalApp {
         let Some(w) = self.workspace.worktree(wid) else {
             return;
         };
+        if w.detached {
+            return;
+        }
         let path = w.path.clone();
         let name = w.name.clone();
         let color = w.color;
@@ -9496,14 +9562,19 @@ impl MuxalApp {
             .project(w.project_id)
             .map(|p| p.root_path.clone())
             .unwrap_or_default();
-        let changed = integrations::worktree_change_count(&path);
-        let unmerged = integrations::repo_head(&root).map_or(0, |base| {
-            integrations::worktree_unmerged_count(&path, &base)
-        });
+        let (changed, unmerged) = match integrations::worktree_state(&root, &path) {
+            Ok(state) => state,
+            Err(error) => {
+                self.keep_failed_worktree(wid, &error, cx);
+                return;
+            }
+        };
         if changed == 0 && unmerged == 0 {
             // Fully landed: remove the worktree and its (empty) branch.
-            integrations::remove_worktree(&root, &path);
-            integrations::delete_branch(&root, &branch);
+            if let Err(error) = integrations::remove_clean_worktree(&root, &path, &branch) {
+                self.keep_failed_worktree(wid, &error, cx);
+                return;
+            }
             self.workspace.remove_worktree_meta(wid);
             self.persist();
             return;
@@ -9544,13 +9615,18 @@ impl MuxalApp {
             .project(w.project_id)
             .map(|p| p.root_path.clone())
             .unwrap_or_default();
-        let changed = integrations::worktree_change_count(&path);
-        let unmerged = integrations::repo_head(&root).map_or(0, |base| {
-            integrations::worktree_unmerged_count(&path, &base)
-        });
+        let (changed, unmerged) = match integrations::worktree_state(&root, &path) {
+            Ok(state) => state,
+            Err(error) => {
+                self.keep_failed_worktree(wid, &error, cx);
+                return;
+            }
+        };
         if changed == 0 && unmerged == 0 {
-            integrations::remove_worktree(&root, &path);
-            integrations::delete_branch(&root, &branch);
+            if let Err(error) = integrations::remove_clean_worktree(&root, &path, &branch) {
+                self.keep_failed_worktree(wid, &error, cx);
+                return;
+            }
             self.workspace.remove_worktree_meta(wid);
             self.persist();
             cx.notify();
@@ -9592,7 +9668,10 @@ impl MuxalApp {
         };
         match integrations::git_commit(&integrations::RepoLoc::new(d.path.clone()), &msg) {
             Ok(_) => {
-                integrations::remove_worktree(&d.root, &d.path);
+                if let Err(error) = integrations::remove_committed_worktree(&d.root, &d.path) {
+                    self.keep_failed_worktree(d.wid, &error, cx);
+                    return;
+                }
                 self.workspace.remove_worktree_meta(d.wid);
             }
             Err(e) => {
@@ -9612,8 +9691,14 @@ impl MuxalApp {
         let Some(d) = self.pending_worktree_dispose.pop_front() else {
             return;
         };
-        integrations::remove_worktree(&d.root, &d.path);
-        integrations::delete_branch(&d.root, &d.branch);
+        if let Err(error) = integrations::remove_worktree(&d.root, &d.path) {
+            self.keep_failed_worktree(d.wid, &error, cx);
+            return;
+        }
+        if let Err(error) = integrations::delete_branch(&d.root, &d.branch) {
+            self.keep_failed_worktree(d.wid, &error, cx);
+            return;
+        }
         self.workspace.remove_worktree_meta(d.wid);
         self.persist();
         cx.notify();
@@ -9654,8 +9739,14 @@ impl MuxalApp {
         }
         match integrations::merge_worktree_branch(&d.root, &d.branch) {
             Ok(()) => {
-                integrations::remove_worktree(&d.root, &d.path);
-                integrations::delete_branch(&d.root, &d.branch);
+                if let Err(error) = integrations::remove_committed_worktree(&d.root, &d.path) {
+                    self.keep_failed_worktree(d.wid, &error, cx);
+                    return;
+                }
+                if let Err(error) = integrations::delete_merged_branch(&d.root, &d.branch) {
+                    self.keep_failed_worktree(d.wid, &error, cx);
+                    return;
+                }
                 self.workspace.remove_worktree_meta(d.wid);
             }
             Err(e) => {
@@ -9701,6 +9792,7 @@ impl MuxalApp {
         cx.spawn_in(window, async move |this: WeakEntity<Self>, cx| {
             let result = cx.background_executor().spawn(async move { op() }).await;
             let _ = this.update(cx, |this, cx| {
+                this.status_probe_cache = status_probes::Cache::default();
                 match result {
                     Ok(out) => this.add_event(NotifKind::Success, ok, git_notify_detail(&out)),
                     Err(e) => {
@@ -10568,14 +10660,23 @@ impl MuxalApp {
             .map(|p| p.root_path.clone())
             .unwrap_or_default();
         let instances = self.workspace.instances_using(wid);
-        // Drop the registry entry first so each close skips the dispose prompt
-        // (dispose_worktree_if_orphaned no-ops when the worktree is gone).
-        self.workspace.remove_worktree_meta(wid);
+        // Suppress automatic disposal while closing, retaining metadata until
+        // the explicit removal succeeds.
+        if let Some(worktree) = self.workspace.worktree_mut(wid) {
+            worktree.detached = true;
+        }
         for iid in instances {
             self.close_instance(iid, None, cx);
         }
-        integrations::remove_worktree(&root, &path);
-        integrations::delete_branch(&root, &branch);
+        if let Err(error) = integrations::remove_worktree(&root, &path) {
+            self.keep_failed_worktree(wid, &error, cx);
+            return;
+        }
+        self.workspace.remove_worktree_meta(wid);
+        if let Err(error) = integrations::delete_branch(&root, &branch) {
+            self.keep_failed_worktree(wid, &error, cx);
+            return;
+        }
         self.worktree_changes.remove(&wid);
         self.persist();
         cx.notify();

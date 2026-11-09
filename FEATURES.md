@@ -358,6 +358,14 @@ feature is added or changed, update the matching entry here in the same change**
   **Ask agent to prepare** sends a summary request to the source; use an idle
   agent with an empty input. Optional direction describes what the recipient
   should do. Preparing turns off Auto for the source pane.
+- **Agents started in a Shell pane** — on Linux and macOS, the same controls
+  become available when the foreground process is recognized as Codex,
+  Antigravity, Claude, OpenCode, or Pi. The receiving pane starts in the
+  agent's actual working directory, and known worktrees retain their identity.
+  Muxal rechecks the process and directory before sending or starting; unknown
+  commands and an idle shell are not treated as agents. In a Shell pane, Muxal
+  cannot detect an agent switching conversations within the same process; review
+  the summary before starting the recipient.
 - **Review before continuing** — the source writes a Markdown summary of goals,
   decisions, changes, tests, open problems, and next steps. The pane shows
   **Review** when the complete document arrives. Edit it, save it for later,
@@ -853,3 +861,24 @@ feature is added or changed, update the matching entry here in the same change**
   layout (the app beside an Applications shortcut). macOS builds are
   Developer-ID-signed + notarized when an Apple cert is configured (else ad-hoc
   signed).
+
+## Reliability and background work
+
+- **Safe worktree cleanup** — failed Git checks keep the worktree and report an
+  error. Automatic cleanup requires verified clean, merged work and uses
+  non-forced removal/deletion; failed removal retains the sidebar entry.
+- **Background discovery** — branch and installed-tool probes reuse metadata
+  stamps with a 60-second fallback. Worktree sidebar counts refresh within ten
+  seconds; visible change panels continue refreshing. Display-only Git reads
+  suppress optional index writes, while editing commands retain normal locks.
+- **Terminal bounds and shutdown** — four output chunks of at most 64 KiB per
+  pane provide backpressure without dropping bytes while open. Pane closure
+  releases blocked output and idle Unix readers; a child ignoring hangup gets
+  a five-second cleanup grace before forced termination. Immediate terminal
+  query replies are parsed before queue admission and retain their ordering.
+- **Input correctness** — modified Backspace preserves word/line editing.
+  Missing working directories refuse launch instead of silently using HOME.
+  Recognizable Claude and Codex drafts are excluded from lifecycle marker
+  checks; additional Claude permission forms retain the compact input badge.
+- **Shared memory ignores** — existing Git excludes are honored before Muxal
+  adds its directory to a project's .gitignore.

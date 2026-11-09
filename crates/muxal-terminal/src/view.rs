@@ -540,6 +540,44 @@ fn is_claude_live_background_row(line: &str) -> bool {
     is_live_background_row(&format!("· {summary}"), &["·"], &["shell"], false)
 }
 
+/// Remove a recognizable composer before looking for lifecycle markers.
+/// Without complete Claude box boundaries, retain the conservative fallback.
+fn status_screen(provider: TitleProvider, screen: &str) -> String {
+    let mut lines: Vec<&str> = screen.lines().collect();
+    if provider == TitleProvider::Claude {
+        let rules: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter_map(|(i, line)| {
+                let text = line.trim();
+                (text.chars().count() >= 8 && text.chars().all(|c| matches!(c, '─' | '━' | ' ')))
+                    .then_some(i)
+            })
+            .collect();
+        for pair in rules.windows(2).rev() {
+            if lines[pair[0] + 1..pair[1]]
+                .iter()
+                .any(|line| line.trim_start().starts_with("❯ "))
+            {
+                for line in &mut lines[pair[0] + 1..pair[1]] {
+                    *line = "";
+                }
+                break;
+            }
+        }
+    } else if provider == TitleProvider::Codex
+        && let Some(start) = lines.iter().rposition(|line| {
+            let text = line.trim_start();
+            text.starts_with("› ") && !text["› ".len()..].starts_with(|c: char| c.is_ascii_digit())
+        })
+    {
+        for line in &mut lines[start..] {
+            *line = "";
+        }
+    }
+    lines.join("\n")
+}
+
 fn is_claude_blocked_prompt(screen: &str) -> bool {
     // Prompt chrome is transient and lives near the bottom of the viewport.
     // Restricting the scan avoids matching an old prompt quoted in scrollback.
@@ -568,7 +606,19 @@ fn is_claude_blocked_prompt(screen: &str) -> bool {
             || choice.starts_with("2. no")
             || choice.starts_with("3. no")
     });
-    if recent.contains("do you want to proceed?") && has_choice {
+    if has_choice
+        && [
+            "do you want to proceed?",
+            "do you want to make this edit",
+            "do you want to create",
+            "do you want to overwrite",
+            "do you want to allow",
+            "do you want to fetch",
+            "would you like to proceed",
+        ]
+        .iter()
+        .any(|prompt| recent.contains(prompt))
+    {
         return true;
     }
 
@@ -1553,6 +1603,7 @@ impl TerminalView {
         } else {
             self.session.visible_text()
         };
+        let screen = status_screen(self.title_provider, &screen);
         let base = classify(
             self.exited,
             &screen,
@@ -1972,6 +2023,37 @@ mod tests {
                 Some(Duration::from_secs(30))
             ),
             Some(AgentStatus::Idle)
+        );
+    }
+
+    #[test]
+    fn drafts_cannot_supply_permission_or_working_markers() {
+        let draft = "────────────\n❯ Do you want to proceed?\n1. Yes\nEsc to cancel\nesc to interrupt\n────────────";
+        let context = super::status_screen(TitleProvider::Claude, draft);
+        assert!(!context.contains("Esc to cancel"));
+        assert!(!context.contains("esc to interrupt"));
+        assert_eq!(
+            provider_screen_status(TitleProvider::Claude, &context),
+            None
+        );
+        let real =
+            format!("Do you want to make this edit?\n❯ 1. Yes\n2. No\nEsc to cancel\n{draft}");
+        assert_eq!(
+            provider_screen_status(
+                TitleProvider::Claude,
+                &super::status_screen(TitleProvider::Claude, &real)
+            ),
+            Some(AgentStatus::Blocked)
+        );
+        assert!(
+            !super::status_screen(
+                TitleProvider::Codex,
+                "Answer\n› esc to interrupt\nquoted continuation"
+            )
+            .contains("esc to interrupt")
+        );
+        assert!(
+            super::status_screen(TitleProvider::Codex, "Question\n› 1. Yes").contains("1. Yes")
         );
     }
 

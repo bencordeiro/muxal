@@ -1,7 +1,7 @@
 //! Manual handoff UI and file polling. A completed file only changes a button;
 //! the receiving pane is created exclusively by the Start button handler.
 use super::*;
-use muxal_core::handoff::{HandoffRequest, retained_transfer_ids, reviewed_text};
+use muxal_core::handoff::{HandoffRequest, ShellSource, retained_transfer_ids, reviewed_text};
 use muxal_store::handoff as documents;
 
 pub(super) struct HandoffUi {
@@ -11,6 +11,8 @@ pub(super) struct HandoffUi {
     last_poll: Option<Instant>,
     error: Option<String>,
     focus_return: Option<Uuid>,
+    shell_agents: HashMap<Uuid, crate::shell_agent::ShellAgent>,
+    shell_polling: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -32,6 +34,8 @@ impl HandoffUi {
             last_poll: None,
             error: None,
             focus_return: None,
+            shell_agents: HashMap::new(),
+            shell_polling: false,
         }
     }
 
@@ -40,6 +44,7 @@ impl HandoffUi {
         self.last_poll = None;
         self.error = None;
         self.focus_return = None;
+        self.shell_agents.clear();
     }
 
     pub(super) fn is_open(&self) -> bool {
@@ -54,10 +59,12 @@ impl MuxalApp {
 
     pub(super) fn handoff_available(&self, iid: Uuid) -> bool {
         self.settings.handoffs_enabled
-            && self
-                .workspace
-                .instance(iid)
-                .is_some_and(|i| i.kind == InstanceKind::Terminal && i.program.is_some())
+            && self.workspace.instance(iid).is_some_and(|i| {
+                i.kind == InstanceKind::Terminal
+                    && (i.program.is_some()
+                        || self.handoff_ui.shell_agents.contains_key(&iid)
+                        || self.handoff_request(iid).is_some())
+            })
             && !self.popouts.contains_key(&iid)
     }
 
@@ -80,13 +87,28 @@ impl MuxalApp {
         }
     }
 
-    fn handoff_source(&self, request: &HandoffRequest) -> Option<&Instance> {
+    fn detected_shell(&self, iid: Uuid, cx: &App) -> Option<&crate::shell_agent::ShellAgent> {
+        let agent = self.handoff_ui.shell_agents.get(&iid)?;
+        let view = self.terminals.get(&iid)?.read(cx);
+        (!view.exited() && view.session().foreground_pid() == Some(agent.pid)).then_some(agent)
+    }
+
+    fn handoff_source(&self, request: &HandoffRequest, cx: &App) -> Option<&Instance> {
         let instance = self.workspace.instance(request.source)?;
         let project = self.workspace.project(instance.project_id)?;
-        let cwd = instance
-            .worktree_path
-            .as_deref()
-            .unwrap_or(&project.root_path);
+        let cwd = if let Some(expected) = &request.shell_source {
+            let agent = self.detected_shell(request.source, cx)?;
+            if !expected.matches(agent.pid, &agent.identity, agent.name) {
+                return None;
+            }
+            agent.cwd.as_path()
+        } else {
+            instance
+                .cwd_override
+                .as_deref()
+                .or(instance.worktree_path.as_deref())
+                .unwrap_or(&project.root_path)
+        };
         request.matches_source(instance, cwd).then_some(instance)
     }
 
@@ -94,7 +116,13 @@ impl MuxalApp {
         self.handoff_available(source)
             && self.terminals.get(&source).is_some_and(|v| {
                 let view = v.read(cx);
-                !view.exited() && matches!(view.status(), AgentStatus::Idle | AgentStatus::Done)
+                !view.exited()
+                    && matches!(view.status(), AgentStatus::Idle | AgentStatus::Done)
+                    && (self
+                        .workspace
+                        .instance(source)
+                        .is_some_and(|i| i.program.is_some())
+                        || self.detected_shell(source, cx).is_some())
             })
     }
 
@@ -161,12 +189,30 @@ impl MuxalApp {
         let Some(project) = self.workspace.project(instance.project_id) else {
             return;
         };
-        let cwd = instance
-            .worktree_path
-            .clone()
+        let shell = if instance.program.is_none() {
+            let Some(agent) = self.detected_shell(source, cx) else {
+                return;
+            };
+            if crate::shell_agent::inspect(agent.pid).as_ref() != Some(agent) {
+                return;
+            }
+            Some(agent.clone())
+        } else {
+            None
+        };
+        let cwd = shell
+            .as_ref()
+            .map(|a| a.cwd.clone())
+            .or_else(|| instance.cwd_override.clone())
+            .or_else(|| instance.worktree_path.clone())
             .unwrap_or_else(|| project.root_path.clone());
         let direction = self.handoff_ui.input.read(cx).value().to_string();
-        let request = HandoffRequest::new(instance, cwd, direction);
+        let mut request = HandoffRequest::new(instance, cwd, direction);
+        request.shell_source = shell.map(|a| ShellSource {
+            pid: a.pid,
+            identity: a.identity,
+            name: a.name.to_string(),
+        });
         if let Err(error) = std::fs::create_dir_all(&dir) {
             self.handoff_error(
                 &tf(
@@ -191,6 +237,24 @@ impl MuxalApp {
         // Preparing a summary should not be followed by an auto-continue turn.
         self.auto.remove(&source);
         let session = self.terminals[&source].read(cx).session().clone();
+        let shell_valid = self.handoff_request(source).is_none_or(|request| {
+            request.shell_source.as_ref().is_none_or(|expected| {
+                session.foreground_pid() == Some(expected.pid)
+                    && crate::shell_agent::inspect(expected.pid).is_some_and(|agent| {
+                        expected.matches(agent.pid, &agent.identity, agent.name)
+                            && agent.cwd == request.cwd
+                    })
+            })
+        });
+        if !shell_valid {
+            self.workspace.handoffs.retain(|r| r.source != source);
+            self.try_persist();
+            self.handoff_error(
+                &t("The source conversation or directory changed. Prepare a new handoff."),
+                cx,
+            );
+            return;
+        }
         // One line also works when a harness has bracketed paste disabled.
         session.paste(&prompt.split_whitespace().collect::<Vec<_>>().join(" "));
         session.mark_turn_submitted();
@@ -208,7 +272,22 @@ impl MuxalApp {
         let Some(text) = request.summary.clone() else {
             return;
         };
-        let default = self.handoff_source(&request).and_then(|i| i.preset_id);
+        let default = request
+            .shell_source
+            .as_ref()
+            .and_then(|shell| {
+                self.presets
+                    .iter()
+                    .find(|p| {
+                        p.program
+                            .as_deref()
+                            .and_then(|p| Path::new(p).file_name())
+                            .and_then(|n| n.to_str())
+                            == Some(shell.name.as_str())
+                    })
+                    .map(|p| p.id)
+            })
+            .or_else(|| self.handoff_source(&request, cx).and_then(|i| i.preset_id));
         let eligible = |p: &&AgentPreset| p.program.is_some() && self.agent_runnable(p);
         let recipient = self
             .presets
@@ -343,13 +422,23 @@ impl MuxalApp {
             });
             return;
         }
-        let Some(source) = self.handoff_source(&request).cloned() else {
+        let Some(source) = self.handoff_source(&request, cx).cloned() else {
             self.handoff_error(
                 &t("The source conversation or directory changed. Prepare a new handoff."),
                 cx,
             );
             return;
         };
+        if let Some(shell) = &request.shell_source
+            && crate::shell_agent::inspect(shell.pid)
+                .is_none_or(|a| !shell.matches(a.pid, &a.identity, a.name) || a.cwd != request.cwd)
+        {
+            self.handoff_error(
+                &t("The source conversation or directory changed. Prepare a new handoff."),
+                cx,
+            );
+            return;
+        }
         let Some(project) = self.workspace.project(request.project) else {
             return;
         };
@@ -388,12 +477,28 @@ impl MuxalApp {
         self.workspace.handoffs.retain(|r| r.id != id);
         // Inherit explicitly even when there is no worktree. The toolbar's new-
         // worktree toggle must not put the recipient in a different checkout.
+        let worktree_choice = if request.shell_source.is_some() {
+            self.workspace
+                .worktrees
+                .iter()
+                .filter(|w| {
+                    w.project_id == request.project
+                        && (request.cwd.starts_with(&w.path)
+                            || std::fs::canonicalize(&w.path)
+                                .is_ok_and(|path| request.cwd.starts_with(path)))
+                })
+                .max_by_key(|w| w.path.components().count())
+                .map(|w| WorktreeChoice::Resume(w.id))
+                .unwrap_or(WorktreeChoice::None)
+        } else {
+            WorktreeChoice::Inherit(source.id)
+        };
         self.place_and_spawn(
             request.project,
             instance,
             PlacementMode::Split(SplitDirection::Horizontal),
             Some(source.id),
-            Some(WorktreeChoice::Inherit(source.id)),
+            Some(worktree_choice),
             window,
             cx,
         );
@@ -499,6 +604,73 @@ impl MuxalApp {
         .detach();
     }
 
+    /// Resolve process metadata away from the UI thread, only for shell panes
+    /// while handoffs are enabled. Reject observations from a replaced PTY.
+    pub(super) fn poll_shell_handoff_agents(&mut self, cx: &mut Context<Self>) {
+        if !self.settings.handoffs_enabled {
+            if !self.handoff_ui.shell_agents.is_empty() {
+                self.handoff_ui.shell_agents.clear();
+                cx.notify();
+            }
+            return;
+        }
+        if self.handoff_ui.shell_polling {
+            return;
+        }
+        let workspace = self.current_workspace;
+        let pids: Vec<(Uuid, u32)> = self
+            .workspace
+            .instances
+            .iter()
+            .filter(|i| i.kind == InstanceKind::Terminal && i.program.is_none())
+            .filter_map(|i| {
+                self.terminals
+                    .get(&i.id)
+                    .and_then(|v| v.read(cx).session().foreground_pid())
+                    .map(|pid| (i.id, pid))
+            })
+            .collect();
+        if pids.is_empty() {
+            if !self.handoff_ui.shell_agents.is_empty() {
+                self.handoff_ui.shell_agents.clear();
+                cx.notify();
+            }
+            return;
+        }
+        self.handoff_ui.shell_polling = true;
+        cx.spawn(async move |this, cx| {
+            let agents = cx
+                .background_executor()
+                .spawn(async move {
+                    pids.into_iter()
+                        .filter_map(|(id, pid)| crate::shell_agent::inspect(pid).map(|a| (id, a)))
+                        .collect::<HashMap<_, _>>()
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.handoff_ui.shell_polling = false;
+                if !this.settings.handoffs_enabled || this.current_workspace != workspace {
+                    return;
+                }
+                let agents: HashMap<_, _> = agents
+                    .into_iter()
+                    .filter(|(id, agent)| {
+                        this.workspace.instance(*id).is_some_and(|i| {
+                            i.kind == InstanceKind::Terminal && i.program.is_none()
+                        }) && this.terminals.get(id).is_some_and(|v| {
+                            v.read(cx).session().foreground_pid() == Some(agent.pid)
+                        })
+                    })
+                    .collect();
+                if this.handoff_ui.shell_agents != agents {
+                    this.handoff_ui.shell_agents = agents;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn render_handoff(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(dialog) = self.handoff_ui.dialog else {
             return div().into_any_element();
@@ -526,9 +698,13 @@ impl MuxalApp {
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
                         .child(
-                            source
-                                .worktree_path
-                                .as_deref()
+                            self.handoff_request(source.id)
+                                .map(|r| r.cwd.as_path())
+                                .or_else(|| {
+                                    self.detected_shell(source.id, cx).map(|a| a.cwd.as_path())
+                                })
+                                .or(source.cwd_override.as_deref())
+                                .or(source.worktree_path.as_deref())
                                 .unwrap_or(&project.root_path)
                                 .display()
                                 .to_string(),
@@ -629,7 +805,7 @@ impl MuxalApp {
                     .handoffs
                     .iter()
                     .find(|r| r.id == request)
-                    .is_some_and(|r| self.handoff_source(r).is_some());
+                    .is_some_and(|r| self.handoff_source(r, cx).is_some());
                 if !source_valid {
                     body = body.child(div().text_sm().child(t(
                         "The source conversation or directory changed. Prepare a new handoff.",

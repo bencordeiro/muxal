@@ -17,6 +17,7 @@ mod music;
 mod present_pump;
 mod session_binding;
 mod settings_view;
+mod shell_agent;
 mod spider;
 mod spider_live;
 mod spider_scan;
