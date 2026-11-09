@@ -271,7 +271,8 @@ add a new `##` category if none fits).
 handoff/reliability changes, reviewed and approved the colors-only theme work,
 and explicitly requested the combined patch release and normal release ritual.
 The implementation is on `dev/shell-agent-handoffs`. The local Linux gate has
-638 active tests (one ignored); rerun it for the version bump before tagging.
+638 active tests (one ignored); the version-bump gate and isolated smoke pass.
+GitHub retired the macOS 14 runner; CI and release jobs now use macOS 15.
 Publish and verify packages before promotion; never restart the owner's windows.
 
 - Shell handoffs recognize Codex, Antigravity (`agy`), Claude, OpenCode, and Pi

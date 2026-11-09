@@ -59,6 +59,7 @@ publish the matching version section; older releases remain available on the
 
 ### Development
 
+- Move macOS CI and release packaging to the supported macOS 15 runner.
 - Added regression coverage for shell-agent identity and directory tracking,
   worktree failures, linked-worktree polling, draft-safe status parsing, bounded
   terminal streams and teardown, and theme-zone parsing and fallback behavior.
