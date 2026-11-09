@@ -6,6 +6,13 @@ publish the matching version section; older releases remain available on the
 
 ## Unreleased
 
+### Development
+
+- Make the full-queue terminal shutdown regression deterministic by explicitly
+  ignoring hangup, waiting for the queue to fill, and allowing the documented
+  child cleanup grace period. The previous three-second test deadline could
+  fail on macOS despite correct five-second cleanup; application code is unchanged.
+
 ## v0.5.7 — 2026-11-09
 
 ### Added

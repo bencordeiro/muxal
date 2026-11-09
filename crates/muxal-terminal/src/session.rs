@@ -2818,16 +2818,29 @@ mod tests {
     #[test]
     fn closing_a_full_queue_unblocks_reader_even_if_receiver_is_retained() {
         let (session, rx) = TerminalSession::spawn(
-            CommandSpec::program("/bin/sh", vec!["-c".into(), "exec yes".into()]),
+            CommandSpec::program("/bin/sh", vec!["-c".into(), "trap '' HUP; exec yes".into()]),
             80,
             24,
         )
         .unwrap();
-        std::thread::sleep(Duration::from_millis(100));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while rx.len() < 4 {
+            assert!(Instant::now() < deadline, "output queue never filled");
+            std::thread::sleep(Duration::from_millis(10));
+        }
         session.kill();
-        let deadline = Instant::now() + Duration::from_secs(3);
+        assert!(
+            rx.is_closed(),
+            "pane closure must release output immediately"
+        );
+        // The reader owns child reaping too. An ignored hangup deliberately
+        // gets a five-second grace period before SIGKILL, plus exit harvesting.
+        let deadline = Instant::now() + Duration::from_secs(8);
         while !session._reader.is_finished() {
-            assert!(Instant::now() < deadline, "reader blocked after close");
+            assert!(
+                Instant::now() < deadline,
+                "reader or child survived the cleanup grace period"
+            );
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(rx.is_closed());

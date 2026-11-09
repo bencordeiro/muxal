@@ -267,13 +267,23 @@ add a new `##` category if none fits).
 
 ## Where things stand (update this section when it changes)
 
-**v0.5.7 release preparation (2026-11-09):** The owner approved the dev
-handoff/reliability changes, reviewed and approved the colors-only theme work,
-and explicitly requested the combined patch release and normal release ritual.
-The implementation is on `dev/shell-agent-handoffs`. The local Linux gate has
-638 active tests (one ignored); the version-bump gate and isolated smoke pass.
-GitHub retired the macOS 14 runner; CI and release jobs now use macOS 15.
-Publish and verify packages before promotion; never restart the owner's windows.
+**v0.5.7 published (2026-11-09), verification follow-up:** The owner approved
+handoff/reliability and theme work and requested the combined release. Tag
+`v0.5.7` points to `2e484e3`; all native release/package jobs succeeded. All ten
+published checksums pass, the Linux binary reports 0.5.7 with resolving libraries
+and GLIBC 2.35, both .deb versions are 0.5.7-1, and the universal Mac bundle has
+both architectures and both 0.5.7 version fields. Release notes match CHANGELOG.
+The initial macOS 14 runner was retired; CI/release now use macOS 15.
+
+Linux CI passed. Mac CI exposed an incorrect three-second deadline in the new
+full-queue shutdown test, shorter than the intentional five-second child cleanup
+grace period. The follow-up changes only the test: explicitly ignore hangup,
+wait for a full queue, assert immediate channel closure, and allow eight seconds
+for reaping. The local gate still passes 638 tests (one ignored); native CI must
+confirm the fix. Do not retag or republish 0.5.7 for this test-only correction.
+The interrupted release session did not promote main; installed main was checked
+and still reports 0.5.6. Finish native CI and promotion, then update this note.
+Never restart the owner's windows.
 
 - Shell handoffs recognize Codex, Antigravity (`agy`), Claude, OpenCode, and Pi
   started inside Shell panes. Preparation/start recheck foreground process and
