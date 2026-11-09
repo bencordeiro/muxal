@@ -403,6 +403,8 @@ pub struct TerminalSession {
     /// when agent output is already queued.
     interactive_until: Mutex<Option<Instant>>,
     _reader: JoinHandle<()>,
+    #[cfg(test)]
+    reader_phase: Arc<AtomicU8>,
 }
 
 /// Viewport damage since the last paint, derived from alacritty's damage tracker.
@@ -717,6 +719,10 @@ impl TerminalSession {
         let profile_reads =
             tx.carries_timing() && instance_id.is_some() && crate::profile::is_enabled();
         let output_sender = tx.clone();
+        #[cfg(test)]
+        let reader_phase = Arc::new(AtomicU8::new(0));
+        #[cfg(test)]
+        let loop_phase = reader_phase.clone();
         let reader_handle = std::thread::Builder::new()
             .name("muxal-pty-reader".to_string())
             .spawn(move || {
@@ -727,6 +733,8 @@ impl TerminalSession {
                     reply_replies,
                     reply_palette,
                     profile_reads,
+                    #[cfg(test)]
+                    loop_phase,
                 )
             })
             .context("spawn reader thread")?;
@@ -793,6 +801,8 @@ impl TerminalSession {
             pending_damage: Mutex::new(ContentDamage::Full),
             interactive_until: Mutex::new(None),
             _reader: reader_handle,
+            #[cfg(test)]
+            reader_phase,
         });
 
         if let Some(instance_id) = instance_id {
@@ -2130,6 +2140,7 @@ fn read_loop(
     replies: Arc<Replies>,
     palette: Arc<Mutex<TerminalPalette>>,
     profile_reads: bool,
+    #[cfg(test)] phase: Arc<AtomicU8>,
 ) {
     let mut buf = [0u8; 65536];
     let mut immediate = ImmediateReplies::new(replies, palette, &term_config());
@@ -2140,6 +2151,8 @@ fn read_loop(
     let mut ui_gone = false;
     let mut read_sequence = 0u64;
     loop {
+        #[cfg(test)]
+        phase.store(1, Ordering::Release);
         match reader.read(&mut buf) {
             Ok(0) => break, // EOF → every slave fd closed; child is (probably) gone
             Ok(n) => {
@@ -2147,7 +2160,11 @@ fn read_loop(
                     read_sequence = read_sequence.wrapping_add(1).max(1);
                     profile::pty_read(n, read_sequence)
                 });
+                #[cfg(test)]
+                phase.store(2, Ordering::Release);
                 immediate.advance(&buf[..n]);
+                #[cfg(test)]
+                phase.store(3, Ordering::Release);
                 if !tx.send_output(buf[..n].to_vec(), timing) {
                     // Receiver dropped — UI is gone. Still fall through to reap
                     // the child, or it lingers as a zombie.
@@ -2165,7 +2182,11 @@ fn read_loop(
     }
     // The reader's master-fd dup is no longer needed; free it before the
     // (potentially long) reap below so closed sessions don't hold PTYs open.
+    #[cfg(test)]
+    phase.store(5, Ordering::Release);
     drop(reader);
+    #[cfg(test)]
+    phase.store(6, Ordering::Release);
     ui_gone |= tx.is_closed();
     // Fast bounded poll for the exit status, so a prompt exit reports its code
     // with the Exit event. None after the window means the code is unknown *so
@@ -2173,6 +2194,8 @@ fn read_loop(
     let mut code = None;
     let mut signal = None;
     for _ in 0..20 {
+        #[cfg(test)]
+        phase.store(7, Ordering::Release);
         match child.try_wait() {
             Ok(Some(status)) => {
                 // A signalled child has no exit code of its own; portable_pty
@@ -2198,6 +2221,8 @@ fn read_loop(
     if code.is_none() {
         #[cfg(unix)]
         let cleanup_started = Instant::now();
+        #[cfg(test)]
+        phase.store(8, Ordering::Release);
         while let Ok(None) = child.try_wait() {
             #[cfg(unix)]
             if ui_gone
@@ -2205,6 +2230,8 @@ fn read_loop(
                 && let Some(pid) = child.process_id()
             {
                 // This unreaped child still owns its PID; never signal a reused PID.
+                #[cfg(test)]
+                phase.store(9, Ordering::Release);
                 unsafe {
                     libc::kill(pid as i32, libc::SIGKILL);
                 }
@@ -2212,6 +2239,8 @@ fn read_loop(
             std::thread::sleep(Duration::from_millis(100));
         }
     }
+    #[cfg(test)]
+    phase.store(10, Ordering::Release);
 }
 
 // Real-PTY tests are Unix-only, like the `tests` module below. A Windows
@@ -2839,7 +2868,10 @@ mod tests {
         while !session._reader.is_finished() {
             assert!(
                 Instant::now() < deadline,
-                "reader or child survived the cleanup grace period"
+                "reader or child survived cleanup: phase={}, pid={:?}, queue={}",
+                session.reader_phase.load(Ordering::Acquire),
+                session.child_pid(),
+                rx.len()
             );
             std::thread::sleep(Duration::from_millis(10));
         }

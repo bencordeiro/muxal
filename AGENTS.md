@@ -284,7 +284,11 @@ confirm the fix. Do not retag or republish 0.5.7 for this test-only correction.
 The interrupted release session had left installed main at 0.5.6. The follow-up
 completed `scripts/promote.sh`: installed main now reports 0.5.7, with the launcher
 refreshed. The owner restarts their windows themselves; never restart them.
-The corrected native CI run is queued/running and must still be checked. The
+The eight-second version of the full-queue test also failed on Mac; the earlier
+assumption that this was only a short deadline was incomplete. Investigation now
+adds test-only reader phase reporting and a manual macOS terminal diagnostics
+workflow (Intel or Apple Silicon) to locate the stall. Do not claim Mac shutdown
+is verified until native regressions pass. The
 published tag and packages are unchanged by the test-only fix.
 
 - Shell handoffs recognize Codex, Antigravity (`agy`), Claude, OpenCode, and Pi

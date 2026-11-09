@@ -8,6 +8,8 @@ publish the matching version section; older releases remain available on the
 
 ### Development
 
+- Add test-only shutdown phase reporting and an on-demand native macOS terminal
+  regression workflow to diagnose the remaining full-queue shutdown stall.
 - Make the full-queue terminal shutdown regression deterministic by explicitly
   ignoring hangup, waiting for the queue to fill, and allowing the documented
   child cleanup grace period. The previous three-second test deadline could

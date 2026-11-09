@@ -1,0 +1,33 @@
+name: macOS terminal diagnostics
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: Native macOS runner
+        type: choice
+        options: [macos-15-intel, macos-15]
+        default: macos-15-intel
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  terminal:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: macos-terminal-${{ runner.arch }}
+          cache-on-failure: true
+      - name: Full-queue shutdown regression
+        run: cargo test -p muxal-terminal --lib session::tests::closing_a_full_queue_unblocks_reader_even_if_receiver_is_retained -- --nocapture
+      - name: All terminal regressions
+        run: cargo test -p muxal-terminal --lib
