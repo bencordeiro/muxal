@@ -6,6 +6,33 @@ publish the matching version section; older releases remain available on the
 
 ## Unreleased
 
+## v0.5.7 — 2026-11-09
+
+### Added
+
+- Themes can now color the terminal, the gaps behind panes, pane headers, and
+  status badges independently. Themes that don't use this look the same as before.
+- Four themes: Verdigris (deep teal, bronze, and copper), Rosewood (red-brown wood
+  and cool aqua), Ledger (warm paper with dark terminals), and Ledger Dark.
+
+### Changed
+
+- Manual handoffs now recognize Codex, Antigravity, Claude, OpenCode, and Pi
+  started inside Shell panes on Linux and macOS. The new pane uses the agent's
+  actual working directory and preserves known worktree identity. Muxal checks
+  the foreground process and directory before sending and starting the handoff.
+- Refine Mainframe's hacker-green look: phosphor text and accents stay, now on a
+  black screen inside a neutral graphite frame with tiered syntax greens. Finished
+  agents read cyan so they no longer match working agents.
+- Refresh Clay Dark with deep warm ink terminals inside a lighter stone frame and
+  a terracotta header on the focused pane.
+- Rework Ember Observatory with a night-sky terminal, coal top bar, and ember
+  focused header. Its working and input statuses were identical and now differ.
+- Rework Ayu Dark with ink terminals in a slate-blue frame and a citron accent, and
+  make its previously near-unreadable secondary text legible.
+- Theme zoning changes colors only; existing layouts and unzoned theme fallbacks
+  are preserved, and Ayu Light is unchanged.
+
 ### Fixed
 
 - Keep worktrees and their registry entries when Git safety checks or removal
@@ -30,28 +57,17 @@ publish the matching version section; older releases remain available on the
   readers; a closed pane's unreaped Unix child is force-killed after its grace
   period if it ignores hangup. Query replies still run before queue admission.
 
-### Changed
+### Development
 
-- Manual handoffs now recognize Codex, Antigravity, Claude, OpenCode, and Pi
-  started inside Shell panes on Linux and macOS. The new pane uses the agent's
-  actual working directory and preserves known worktree identity. Muxal checks
-  the foreground process and directory before sending and starting the handoff.
-- Refine Mainframe's hacker-green look: phosphor text and accents stay, now on a
-  black screen inside a neutral graphite frame with tiered syntax greens. Finished
-  agents read cyan so they no longer match working agents.
-- Refresh Clay Dark with deep warm ink terminals inside a lighter stone frame and
-  a terracotta header on the focused pane.
-- Rework Ember Observatory with a night-sky terminal, coal top bar, and ember
-  focused header. Its working and input statuses were identical and now differ.
-- Rework Ayu Dark with ink terminals in a slate-blue frame and a citron accent, and
-  make its previously near-unreadable secondary text legible.
+- Added regression coverage for shell-agent identity and directory tracking,
+  worktree failures, linked-worktree polling, draft-safe status parsing, bounded
+  terminal streams and teardown, and theme-zone parsing and fallback behavior.
+- The local Linux gate passes 638 active tests (one ignored), strict Clippy,
+  formatting, build, the 705-key translation check, and isolated-HOME launch smoke.
+- Terminal wakeups reuse the existing polling dependency; theme zones reuse
+  serde. No additional native library dependency or browser runtime is introduced.
 
-### Added
-
-- Themes can now color the terminal, the gaps behind panes, pane headers, and
-  status badges independently. Themes that don't use this look the same as before.
-- Four themes: Verdigris (deep teal, bronze, and copper), Rosewood (red-brown wood
-  and cool aqua), Ledger (warm paper with dark terminals), and Ledger Dark.
+**Full Changelog**: https://github.com/bencordeiro/muxal/compare/v0.5.6...v0.5.7
 
 ## v0.5.6 — 2026-10-20
 

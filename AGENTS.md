@@ -267,70 +267,35 @@ add a new `##` category if none fits).
 
 ## Where things stand (update this section when it changes)
 
-**Unreleased reliability pass — implemented, awaiting dev review:** The
-applicable improvements below are implemented alongside the uncommitted
-shell-handoff work. The full Linux gate passes 632 active tests (one ignored),
-strict Clippy, formatting, build, and the 705-key i18n check. The isolated-HOME
-five-second launch smoke passed. Dev is running through `scripts/dev.sh` in
-`.muxal-dev/reliability-review`, with build artifacts outside the repository in
-`/tmp/muxal-reliability-target`. Native macOS behavior remains untested locally.
-No version bump, commit, push, release, or promotion has happened yet. Preserve
-this work on
-`dev/shell-agent-handoffs`. Audit compared upstream v0.3.1 through master
-`396ac95` (2026-11-06); all commit summaries were reviewed and relevant patches
-compared, not every line of every commit. Upstream is still ideas-only.
+**v0.5.7 release preparation (2026-11-09):** The owner approved the dev
+handoff/reliability changes, reviewed and approved the colors-only theme work,
+and explicitly requested the combined patch release and normal release ritual.
+The implementation is on `dev/shell-agent-handoffs`. The local Linux gate has
+638 active tests (one ignored); rerun it for the version bump before tagging.
+Publish and verify packages before promotion; never restart the owner's windows.
 
-1. **First, worktree safety:** `worktree_change_count` and
-   `worktree_unmerged_count` report zero on Git errors; the last-pane cleanup
-   can then forcibly remove a dirty worktree or an unmerged branch. Reproduced
-   safely in a disposable repository by simulating a failed status command.
-   Preserve the worktree and report an error when checks or removal fail; test
-   the failure paths and retain metadata. Upstream currently shares this issue.
-2. Reduce unnecessary background Git/process polling and make display-only Git
-   operations avoid optional locks/index refresh; preserve timely updates and
-   normal locking for writes (upstream `4825409`, `d944407`).
-3. Fix modified Backspace terminal input (`b3420f7`); refuse or clearly report
-   a missing launch directory instead of silently starting in HOME (`1c593db`);
-   and respect existing Git ignore rules before modifying `.gitignore` for
-   shared memory (`98f1f9e`).
-4. Improve agent status recognition so typed drafts do not forge status and
-   genuine permission prompts remain visible (`6c0f8ac`, `846a79a`). Preserve
-   Muxal's compact `input` state and Pi binding behavior.
-5. Bound terminal output buffering without losing output or breaking fast,
-   ordered query replies and safe teardown (`414f594`, `91343df`, `3a00d83`).
-   This is a substantial terminal change: honor the reply invariants above and
-   add meaningful load, ordering, and teardown coverage.
-
-The audit also mentioned read/unread Done styling and optional completion/input
-sounds as ideas, not agreed changes; do not add them without the user's choice.
-Before release, obtain the user's dev review. The user has requested
-a release once the work is complete; follow the release ritual and still wait
-for their explicit approval to promote main after they test dev. Never restart
-their windows. Handoffs were reported working by the user but cross-harness
-end-to-end coverage and native macOS behavior remain unverified.
-
-**Unreleased theme work, awaiting the user's dev review:** Themes may add an
-optional `muxal` section of independent zone colors (terminal, floor, pane headers,
-status text), resolved in `theme.rs`; anything omitted keeps its previous color.
-The user approved this from design mockups as colors only: **no layout or
-structural changes**. Verdigris, Mainframe, Clay Dark, Ledger, Ledger Dark, Rosewood,
-Ember Observatory, and Ayu Dark use zones, for 24 public themes; rationale is in
-`docs/theme-review.md`. Ayu Light is deliberately unchanged. Mainframe must
-remain a hacker-green theme with neutral surfaces and labels: green belongs only in
-text and accents, because tinted surfaces were reviewed and rejected as too green
-on green. Because `working` uses `primary`, a theme's accent must stay distinct
-from its `warning` and `success` colors. Dialog zones, extra text and border
-levels, and palette fixes for older themes are suggested but not chosen.
-
-**Unreleased handoff follow-up:** `dev/shell-agent-handoffs` adds manual
-handoffs for recognized Codex, Antigravity (`agy`), Claude, OpenCode, and Pi
-processes started inside Shell panes on Linux and macOS. Detection is active
-only while handoffs are enabled; the source process and its working directory
-are checked before preparation and start, and the recipient retains the exact
-directory and any known worktree. Shell-launched agents may change conversation
-within one process without Muxal detecting it, so review remains important.
-This is for dev testing; do not promote without the user's approval. Native
-macOS behavior has not been tested locally.
+- Shell handoffs recognize Codex, Antigravity (`agy`), Claude, OpenCode, and Pi
+  started inside Shell panes. Preparation/start recheck foreground process and
+  directory; recipients retain the directory and known worktree. A conversation
+  switch within the same process is not detected. Cross-harness end-to-end
+  coverage and native macOS behavior remain unverified locally.
+- Worktree cleanup now preserves work on failed Git checks or removal, with
+  non-forced automatic cleanup and commit/merge removal. Background Git/program
+  discovery uses metadata stamps; terminal output is bounded, closure wakes Unix
+  readers, and ignored-hangup children receive a cleanup grace period. Modified
+  Backspace, missing-directory launches, draft-safe status detection, and shared
+  memory ignore handling are fixed. Upstream was audited through `396ac95`;
+  relevant ideas were adapted without importing remote/control/Windows/iOS work.
+- Optional theme `muxal` zones independently color terminal/ANSI, floor, divider,
+  focused/idle headers, idle border, and soft status text, with previous-color
+  fallbacks and ambience tint. Verdigris, Mainframe, Clay Dark, Ledger, Ledger
+  Dark, Rosewood, Ember Observatory, and Ayu Dark use zones: 24 public themes.
+  Ayu Light is unchanged. Mainframe keeps neutral surfaces and labels; green is
+  reserved for text/accents, with distinct working/input/done colors. The owner
+  required colors only: no layout or structural changes. Theme JSON is the source
+  of truth; rationale is in `docs/theme-review.md`.
+- Read/unread Done styling, completion/input sounds, dialog zones, and additional
+  text/border levels are suggestions, not authorized additions to this release.
 
 As of **v0.5.6** (tag `ac84015`, published and promoted; verified 2026-10-20):
 
