@@ -55,10 +55,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # x86_64 + arm64 Linux (native runners), macOS (Apple Silicon).
-        # Intel macOS isn't a separate test runner — it's covered by the release
-        # job's x86_64 cross-compile (the code is arch-portable).
-        os: [ubuntu-22.04, ubuntu-22.04-arm, macos-15]
+        # Native Linux x86/ARM and Intel macOS. The Intel Mac pool avoids
+        # recurring hosted Apple Silicon allocation failures. Universal release
+        # builds still cover both Mac architectures; on-demand terminal tests
+        # can additionally target Apple Silicon via terminal-macos.yml.
+        os: [ubuntu-22.04, ubuntu-22.04-arm, macos-15-intel]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -75,5 +76,8 @@ jobs:
             libxcb1-dev libx11-dev libx11-xcb-dev \
             libasound2-dev libvulkan-dev libdbus-1-dev
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ runner.os == 'macOS' && format('macos-terminal-{0}', runner.arch) || '' }}
+          cache-on-failure: ${{ runner.os == 'macOS' }}
       - run: cargo build --workspace
       - run: cargo test --workspace

@@ -902,6 +902,9 @@ feature is added or changed, update the matching entry here in the same change**
   releases blocked output and idle Unix readers; a child ignoring hangup gets
   a five-second cleanup grace before forced termination. Immediate terminal
   query replies are parsed before queue admission and retain their ordering.
+  Forced cleanup discards pending kernel PTY data only after closure, allowing
+  saturated macOS writers to terminate even while a closed session is retained;
+  live streams remain byte-exact.
 - **Input correctness** — modified Backspace preserves word/line editing.
   Missing working directories refuse launch instead of silently using HOME.
   Recognizable Claude and Codex drafts are excluded from lifecycle marker

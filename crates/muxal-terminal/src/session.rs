@@ -719,6 +719,8 @@ impl TerminalSession {
         let profile_reads =
             tx.carries_timing() && instance_id.is_some() && crate::profile::is_enabled();
         let output_sender = tx.clone();
+        #[cfg(unix)]
+        let reader_control = reader_wake.clone();
         #[cfg(test)]
         let reader_phase = Arc::new(AtomicU8::new(0));
         #[cfg(test)]
@@ -733,6 +735,8 @@ impl TerminalSession {
                     reply_replies,
                     reply_palette,
                     profile_reads,
+                    #[cfg(unix)]
+                    reader_control,
                     #[cfg(test)]
                     loop_phase,
                 )
@@ -2035,6 +2039,7 @@ fn appimage_env_fixups(
 struct ReaderWake {
     poller: Arc<polling::Poller>,
     closed: AtomicBool,
+    file: std::sync::Weak<std::fs::File>,
 }
 #[cfg(unix)]
 impl ReaderWake {
@@ -2042,10 +2047,27 @@ impl ReaderWake {
         self.closed.store(true, Ordering::Release);
         let _ = self.poller.notify();
     }
+
+    /// Once the pane is closed, no queued output will be displayed. BSD PTY
+    /// writers can remain asleep on a full output queue even with SIGKILL
+    /// pending while a retained session still holds the master open. Flush
+    /// both directions after signalling, releasing that wait before reaping.
+    fn discard_pending_io(file: &std::fs::File) {
+        use std::os::fd::AsRawFd;
+        // SAFETY: the caller pins this live master descriptor with an Arc.
+        // Only closed-pane forced cleanup calls this; live streams never do.
+        let result = unsafe { libc::tcflush(file.as_raw_fd(), libc::TCIOFLUSH) };
+        #[cfg(test)]
+        if result != 0 {
+            eprintln!("closed PTY flush: {}", std::io::Error::last_os_error());
+        }
+        #[cfg(not(test))]
+        let _ = result;
+    }
 }
 #[cfg(unix)]
 struct WakeReader {
-    file: std::fs::File,
+    file: Arc<std::fs::File>,
     wake: Arc<ReaderWake>,
 }
 #[cfg(unix)]
@@ -2058,13 +2080,13 @@ impl Read for WakeReader {
             }
             self.wake
                 .poller
-                .modify(&self.file, polling::Event::readable(1))?;
+                .modify(self.file.as_ref(), polling::Event::readable(1))?;
             self.wake.poller.wait(&mut events, None)?;
             if self.wake.closed.load(Ordering::Acquire) {
                 return Ok(0);
             }
             if events.iter().any(|event| event.key == 1) {
-                return match self.file.read(buf) {
+                return match self.file.as_ref().read(buf) {
                     // Unix PTY masters report EIO when their final slave closes,
                     // matching portable-pty's reader EOF normalization.
                     Err(error) if error.raw_os_error() == Some(libc::EIO) => Ok(0),
@@ -2078,7 +2100,7 @@ impl Read for WakeReader {
 #[cfg(unix)]
 impl Drop for WakeReader {
     fn drop(&mut self) {
-        let _ = self.wake.poller.delete(&self.file);
+        let _ = self.wake.poller.delete(self.file.as_ref());
     }
 }
 #[cfg(unix)]
@@ -2090,14 +2112,16 @@ fn interruptible_reader(fd: std::os::fd::RawFd) -> Result<(Box<dyn Read + Send>,
     if dup < 0 {
         return Err(std::io::Error::last_os_error().into());
     }
-    let file = unsafe { std::fs::File::from_raw_fd(dup) };
+    let file = Arc::new(unsafe { std::fs::File::from_raw_fd(dup) });
     let wake = Arc::new(ReaderWake {
         poller: Arc::new(polling::Poller::new()?),
         closed: AtomicBool::new(false),
+        file: Arc::downgrade(&file),
     });
     // SAFETY: WakeReader deregisters the source before closing the owned File.
     unsafe {
-        wake.poller.add(&file, polling::Event::readable(1))?;
+        wake.poller
+            .add(file.as_ref(), polling::Event::readable(1))?;
     }
     Ok((
         Box::new(WakeReader {
@@ -2133,6 +2157,8 @@ pub(crate) fn term_config() -> TermConfig {
 /// Blocking PTY reader. Owns the `Child` so that after EOF it can harvest the
 /// exit code — letting the app tell a clean `exit` from a crash (resume
 /// recovery must not treat a deliberate quit as recoverable).
+// Test builds additionally pass a phase probe for native shutdown failures.
+#[cfg_attr(test, allow(clippy::too_many_arguments))]
 fn read_loop(
     mut reader: Box<dyn Read + Send>,
     mut child: Box<dyn Child + Send + Sync>,
@@ -2140,6 +2166,7 @@ fn read_loop(
     replies: Arc<Replies>,
     palette: Arc<Mutex<TerminalPalette>>,
     profile_reads: bool,
+    #[cfg(unix)] reader_control: Arc<ReaderWake>,
     #[cfg(test)] phase: Arc<AtomicU8>,
 ) {
     let mut buf = [0u8; 65536];
@@ -2180,14 +2207,24 @@ fn read_loop(
             }
         }
     }
-    // The reader's master-fd dup is no longer needed; free it before the
-    // (potentially long) reap below so closed sessions don't hold PTYs open.
+    // Remove the read registration before harvesting the child. Closed-pane
+    // cleanup retains only a bounded flush handle for a saturated BSD PTY.
+    ui_gone |= tx.is_closed();
+    // Pin the descriptor only during bounded closed-pane cleanup. The session
+    // itself holds only a weak reference, so finished panes retain no reader fd.
+    #[cfg(unix)]
+    let flush_handle = if ui_gone {
+        reader_control.file.upgrade()
+    } else {
+        None
+    };
     #[cfg(test)]
     phase.store(5, Ordering::Release);
     drop(reader);
+    #[cfg(unix)]
+    drop(reader_control);
     #[cfg(test)]
     phase.store(6, Ordering::Release);
-    ui_gone |= tx.is_closed();
     // Fast bounded poll for the exit status, so a prompt exit reports its code
     // with the Exit event. None after the window means the code is unknown *so
     // far* (e.g. the PTY closed before the process finished dying).
@@ -2216,7 +2253,7 @@ fn read_loop(
     }
     // Keep waiting until the child is actually reaped. A child that outlives
     // its PTY (daemonized, or slow to die after a kill) parks this thread at a
-    // 1s cadence instead of leaving a permanent zombie when it finally exits;
+    // short sleep between checks instead of leaving a zombie when it exits;
     // the thread costs nothing while sleeping and dies with the process.
     if code.is_none() {
         #[cfg(unix)]
@@ -2232,9 +2269,20 @@ fn read_loop(
                 // This unreaped child still owns its PID; never signal a reused PID.
                 #[cfg(test)]
                 phase.store(9, Ordering::Release);
-                unsafe {
-                    libc::kill(pid as i32, libc::SIGKILL);
+                let result = unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+                #[cfg(test)]
+                if result != 0 {
+                    eprintln!("closed child SIGKILL: {}", std::io::Error::last_os_error());
                 }
+                #[cfg(not(test))]
+                let _ = result;
+                #[cfg(test)]
+                phase.store(11, Ordering::Release);
+                if let Some(file) = &flush_handle {
+                    ReaderWake::discard_pending_io(file);
+                }
+                #[cfg(test)]
+                phase.store(12, Ordering::Release);
             }
             std::thread::sleep(Duration::from_millis(100));
         }

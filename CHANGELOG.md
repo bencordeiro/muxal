@@ -6,6 +6,14 @@ publish the matching version section; older releases remain available on the
 
 ## Unreleased
 
+### Fixed
+
+- Release a saturated closed terminal's pending PTY data after forced child
+  termination, so native BSD/macOS writers can leave their output wait and be
+  reaped even while a closed session is retained. Live output is never flushed.
+- Use the native Intel macOS runner for routine CI after repeated hosted Apple
+  Silicon allocation failures; universal release builds retain both architectures.
+
 ### Development
 
 - Add test-only shutdown phase reporting and an on-demand native macOS terminal
