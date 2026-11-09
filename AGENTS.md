@@ -281,9 +281,11 @@ grace period. The follow-up changes only the test: explicitly ignore hangup,
 wait for a full queue, assert immediate channel closure, and allow eight seconds
 for reaping. The local gate still passes 638 tests (one ignored); native CI must
 confirm the fix. Do not retag or republish 0.5.7 for this test-only correction.
-The interrupted release session did not promote main; installed main was checked
-and still reports 0.5.6. Finish native CI and promotion, then update this note.
-Never restart the owner's windows.
+The interrupted release session had left installed main at 0.5.6. The follow-up
+completed `scripts/promote.sh`: installed main now reports 0.5.7, with the launcher
+refreshed. The owner restarts their windows themselves; never restart them.
+The corrected native CI run is queued/running and must still be checked. The
+published tag and packages are unchanged by the test-only fix.
 
 - Shell handoffs recognize Codex, Antigravity (`agy`), Claude, OpenCode, and Pi
   started inside Shell panes. Preparation/start recheck foreground process and
