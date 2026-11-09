@@ -294,10 +294,10 @@ uses `macos-15-intel` to avoid recurring Apple Silicon hosted-runner allocation
 failures. On-demand terminal diagnostics retain both runner choices; universal
 release builds still cover both Mac architectures.
 
-Verification notes are recorded on `dev/shell-agent-handoffs` so master remains
-at the verified code commit. No new version/tag/release or promotion includes
-this follow-up yet. The owner controls the decision to ship a corrective patch;
-never move the published v0.5.7 tag. Cross-harness end-to-end handoff coverage and
+The owner has now authorized corrective release v0.5.8, including normal package
+verification and atomic promotion. Master includes the verified fix and notes;
+the version-bump gate and publication are in progress. Never move the published
+v0.5.7 tag. Cross-harness end-to-end handoff coverage and
 manual native Mac GUI/playback review remain unverified.
 
 - Shell handoffs recognize Codex, Antigravity (`agy`), Claude, OpenCode, and Pi

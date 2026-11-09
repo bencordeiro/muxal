@@ -6,22 +6,26 @@ publish the matching version section; older releases remain available on the
 
 ## Unreleased
 
+## v0.5.8 — 2026-11-09
+
 ### Fixed
 
 - Release a saturated closed terminal's pending PTY data after forced child
   termination, so native BSD/macOS writers can leave their output wait and be
   reaped even while a closed session is retained. Live output is never flushed.
-- Use the native Intel macOS runner for routine CI after repeated hosted Apple
-  Silicon allocation failures; universal release builds retain both architectures.
 
 ### Development
 
+- Use the native Intel macOS runner for routine CI after repeated hosted Apple
+  Silicon allocation failures; universal release builds retain both architectures.
 - Add test-only shutdown phase reporting and an on-demand native macOS terminal
-  regression workflow to diagnose the remaining full-queue shutdown stall.
+  regression workflow for full-queue shutdown failures.
 - Make the full-queue shutdown fixture deterministic: explicitly ignore hangup,
   wait for a full queue, and separately check immediate channel closure and
   eventual child reaping. The native regression and all 131 terminal tests pass
   after the runtime fix, as does the full 631-test native Mac workspace suite.
+
+**Full Changelog**: https://github.com/bencordeiro/muxal/compare/v0.5.7...v0.5.8
 
 ## v0.5.7 — 2026-11-09
 

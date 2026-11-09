@@ -4452,7 +4452,7 @@ dependencies = [
 
 [[package]]
 name = "muxal"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -4486,7 +4486,7 @@ dependencies = [
 
 [[package]]
 name = "muxal-core"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "base64 0.22.1",
  "serde",
@@ -4502,7 +4502,7 @@ dependencies = [
 
 [[package]]
 name = "muxal-store"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4515,7 +4515,7 @@ dependencies = [
 
 [[package]]
 name = "muxal-terminal"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -4534,7 +4534,7 @@ dependencies = [
 
 [[package]]
 name = "muxal-tray"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "ksni",
  "log",
