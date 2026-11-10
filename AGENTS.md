@@ -267,12 +267,14 @@ add a new `##` category if none fits).
 
 ## Where things stand (update this section when it changes)
 
-**Chrome refinement in dev review (2026-11-09, unreleased):** branch
-`dev/chrome-refinement`. The design pass is finished and owner-reviewed in dev.
-Committed through `2dc4ced`; theme-picker swatches, the pane `±N` count, sidebar
-peek, and preview-row filtering are in the working tree, gate-clean (654 tests),
-awaiting the owner's commit/push/release instruction. The owner asked for a
-sidebar/top-bar refinement pass and reviews it in `scripts/dev.sh`. Top bar is
+**v0.5.9 release preparation (2026-11-09):** The owner completed design
+review in dev and explicitly requested committing the final work, bumping the
+version, and publishing the normal release with a detailed changelog. Branch
+`dev/chrome-refinement` contains the earlier design round in `2dc4ced` and the
+final swatches, change counts, hover peeks, and preview filtering in `8882d40`.
+Version-bump verification and publication are in progress. Verify published
+packages before normal promotion; never restart the owner's windows. The owner
+asked for a sidebar/top-bar refinement pass and reviews it in `scripts/dev.sh`. Top bar is
 grouped with hairlines (launch + tmux/worktree options, saved prompts, Restart,
 pins; right: Search, git diff + dashboard, then app controls); the duplicate
 top-bar Close pane button is removed; Restart, Snippets, workspaces, and memory

@@ -6,59 +6,88 @@ publish the matching version section; older releases remain available on the
 
 ## Unreleased
 
+## v0.5.9 — 2026-11-09
+
 ### Added
 
-- Flight Deck theme: black-glass terminals in a steel-grey instrument panel,
+- **Live agent overview:** the dashboard is now a grid of agents and shells
+  across projects, grouped by project in layout order. Tiles show the pane's
+  title, status and age, worktree marker, and the bottom ten rows of its
+  terminal. A summary counts working agents, requests for input, and recent
+  completions; input requests outline their tile. Click a tile to open its pane.
+- **Peek on hover:** rest the pointer on another agent's sidebar row for
+  450 milliseconds to see its live overview tile beside the sidebar without
+  switching panes. The preview stays within the window, disappears when the
+  pointer leaves or the row is clicked, and takes no focus or clicks. Peeks
+  belong to the main window and skip the already-focused pane and active drags.
+- **Theme picker swatches:** each theme has a miniature showing its chrome,
+  terminal, focused header, accent, and three status colors. Swatches appear in
+  both the picker list and its closed field; the field is wider to fit them.
+- **Checkout change counts:** terminal pane headers show `±N` beside the diff
+  button when their worktree or project checkout has uncommitted files. Counts
+  refresh about every ten seconds and disappear at zero. Panes sharing a
+  checkout share its count; this is a file count, not agent attribution.
+- **Flight Deck theme:** black-glass terminals in a steel-grey instrument panel,
   with magenta focus and cyan, amber, and green for working, input, and done.
-  It replaces Ember Observatory; a saved Ember Observatory selection switches to
-  Flight Deck.
-- Theme picker swatches: each theme is listed with a miniature of its chrome,
-  terminal, focused header, accent, and status colors.
-- Pane headers show `±N` beside the diff button when that pane's checkout has
-  uncommitted files.
-- Peek on hover: resting the pointer on an agent's sidebar row shows a live
-  tile of that agent's terminal beside the sidebar, without switching to it.
-- Overview: the dashboard is now a live grid of every agent across projects.
-  Each tile shows status, age, and the bottom rows of that agent's terminal,
-  refreshed every second; click one to jump to its pane.
-- Status on tabs: a tab's agent icon takes its status color, and the shown
-  tab's underline turns amber when the agent needs input and green when it is
-  done. Colors adjust automatically when they would blend into a themed header.
-
-### Fixed
-
-- Molokai Dark: secondary labels were too dark to read and the sidebar matched
-  the background exactly. Both are corrected; its colors are otherwise unchanged.
-- Gruvbox Dark, Gruvbox Light, and Spaceduck showed working and input in the
-  same color. Each now has three distinct status colors from its own palette.
+  It replaces Ember Observatory; saved Ember Observatory selections migrate
+  automatically. The collection remains at 24 themes.
+- **Status on tabs:** agent icons use their status color, and the active tab's
+  underline uses the input or done color when attention is needed. Colors adjust
+  in lightness when they would otherwise blend into a themed header.
 
 ### Changed
 
-- Pane header icons are larger and fill the tab strip's existing height; the
-  strip itself is no taller. Tabs may be wider, so a single tab shows its full
-  title. The diff pane's refresh control is a proper icon.
-- Regroup the top bar by purpose, with hairlines between groups: the tmux and
-  worktree options sit beside the launch button they affect; Run task, Loops,
-  and Snippets follow; then Restart and the pinned projects. Git diff moves to
-  the right beside the dashboard. The duplicate Close pane button is removed
-  (each pane's header has its own).
-- Give Restart, Snippets, the workspace switcher, and project memory their own
-  icons instead of sharing one with another control.
-- Sidebar project rows keep the project name visible: a long branch name
-  truncates first, and the full name and branch show on hover. Memory, pin, and
-  file-browser buttons appear on the active project and the hovered row.
-- Attention fades with age: working and input always show in full color; a
-  finished turn does for a day, then rests as plain muted text, and after three
-  days reads `stale` like an idle pane. The same rule applies to the sidebar,
-  tabs, and the overview.
-- A working badge shows how long the agent has been working once it passes a
-  minute (`working · 40m`).
-- Shell panes no longer repeat their project's path: at the project root they
-  show `Shell` (numbered when there are several), in a subfolder the relative
-  path (`./server`). Path titles keep their last folder visible when truncated.
-- The Notifications sidebar section is hidden while empty.
-- Pane header buttons sit in spaced groups, with Close set apart from maximize
-  and pop out.
+- **Grouped top bar:** hairlines separate launch controls, saved prompts, Restart,
+  pinned projects, view toggles, and app controls. Tmux and worktree options sit
+  beside the agent launch button; Git diff moves right beside the dashboard.
+  The duplicate top-bar Close pane button is removed; pane headers retain Close.
+- **Distinct icons:** Restart, Snippets, the workspace switcher, and project
+  memory now have their own glyphs, including their related menu entries.
+- **Pane headers:** split controls, pane actions, maximize/pop out, and Close sit
+  in spaced groups, with Close set apart. Icon buttons scale with tab-strip
+  height and UI zoom; the strip itself is no taller. Tabs can be up to 280 pixels
+  wide, and the diff pane's refresh control uses an icon instead of a text glyph.
+- **Clearer project rows:** long branch names truncate before the project name,
+  with both available in a tooltip. Memory, pin, and file-browser actions appear
+  on the active or hovered project; pinned or open actions stay visible elsewhere.
+- **Consistent status emphasis:** working and input stay prominent. A completed
+  turn stays prominent for one day, then becomes plain muted text with a neutral
+  icon; after three days its label reads `stale`. The sidebar, tabs, and overview
+  use the same rule without changing the underlying agent lifecycle.
+- **Working time:** status labels show elapsed time after a minute, such as
+  `working · 40m`, using the current stretch of work rather than an earlier turn.
+- **Shorter shell titles:** inside their project or worktree, root shells show
+  their preset name, numbered when several share the root; subfolders show a
+  relative path such as `./server/src`. Custom titles and paths outside the
+  project remain intact. Path truncation keeps the last folder visible.
+- **More useful previews:** overview and peek tiles skip divider-only lines and
+  box edges, collapse repeated blank lines, and trim blank tails. Readable boxed
+  content stays visible; long rows are bounded by characters rather than bytes.
+- **Quieter notifications:** the sidebar Notifications section appears only
+  while it contains entries.
+
+### Fixed
+
+- Molokai Dark's secondary labels were too dark to read, and its sidebar matched
+  the background exactly. Both are corrected; the rest of its palette is retained.
+- Gruvbox Dark, Gruvbox Light, and Spaceduck used the same color for working and
+  input. Each now uses three distinct status colors from its own palette while
+  preserving its other accents.
+
+### Performance and development
+
+- Overview and peek previews refresh once per second only while visible, with
+  bounded rows and columns. Closed previews perform no extra terminal reads.
+- Project checkout counts reuse the existing worktree refresh cycle; only the
+  active project's own checkout is added, avoiding extra status scans for idle
+  project checkouts. No native dependencies or external preview services are added.
+- Theme status colors are optional and retain existing fallbacks. Regression
+  coverage includes shell title placement, status ages and emphasis, contrast,
+  authored status colors, theme swatches, and preview filtering.
+- The local gate passes 654 active tests (one ignored), formatting, strict Clippy,
+  build, the 705-key translation check, and isolated-HOME launch smoke.
+
+**Full Changelog**: https://github.com/bencordeiro/muxal/compare/v0.5.8...v0.5.9
 
 ## v0.5.8 — 2026-11-09
 
