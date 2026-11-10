@@ -6,6 +6,55 @@ publish the matching version section; older releases remain available on the
 
 ## Unreleased
 
+### Added
+
+- Flight Deck theme: black-glass terminals in a steel-grey instrument panel,
+  with magenta focus and cyan, amber, and green for working, input, and done.
+  It replaces Ember Observatory; a saved Ember Observatory selection switches to
+  Flight Deck.
+- Overview: the dashboard is now a live grid of every agent across projects.
+  Each tile shows status, age, and the bottom rows of that agent's terminal,
+  refreshed every second; click one to jump to its pane.
+- Status on tabs: a tab's agent icon takes its status color, and the shown
+  tab's underline turns amber when the agent needs input and green when it is
+  done. Colors adjust automatically when they would blend into a themed header.
+
+### Fixed
+
+- Molokai Dark: secondary labels were too dark to read and the sidebar matched
+  the background exactly. Both are corrected; its colors are otherwise unchanged.
+- Gruvbox Dark, Gruvbox Light, and Spaceduck showed working and input in the
+  same color. Each now has three distinct status colors from its own palette.
+
+### Changed
+
+- Pane header icons are larger and fill the tab strip's existing height; the
+  strip itself is no taller. Tabs may be wider, so a single tab shows its full
+  title. The diff pane's refresh control is a proper icon.
+- Regroup the top bar by purpose, with hairlines between groups: the tmux and
+  worktree options sit beside the launch button they affect; Run task, Loops,
+  and Snippets follow; then Restart and the pinned projects. Git diff moves to
+  the right beside the dashboard. The duplicate Close pane button is removed
+  (each pane's header has its own).
+- Give Restart, Snippets, the workspace switcher, and project memory their own
+  icons instead of sharing one with another control.
+- Sidebar project rows keep the project name visible: a long branch name
+  truncates first, and the full name and branch show on hover. Memory, pin, and
+  file-browser buttons appear on the active project and the hovered row.
+- Attention fades with age: working and input always show in full color; a
+  finished turn does for a day, then rests as plain muted text, and after three
+  days reads `stale` like an idle pane. The same rule applies to the sidebar,
+  tabs, and the overview.
+- A working badge shows how long the agent has been working once it passes a
+  minute (`working · 40m`).
+- Shell panes no longer repeat their project's path: at the project root they
+  show `Shell` (numbered when there are several), in a subfolder the relative
+  path (`./server`). Path titles keep
+  their last folder visible when truncated.
+- The Notifications sidebar section is hidden while empty.
+- Pane header buttons sit in spaced groups, with Close set apart from maximize
+  and pop out.
+
 ## v0.5.8 — 2026-11-09
 
 ### Fixed

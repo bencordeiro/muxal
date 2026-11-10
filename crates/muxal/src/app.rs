@@ -6,6 +6,7 @@
 mod handoffs;
 mod keybindings;
 mod music;
+mod overview;
 mod spider;
 mod status_probes;
 
@@ -194,12 +195,14 @@ fn restore_move_size_active() -> bool {
 
 /// Status indicator color, taken from the active theme.
 fn status_hsla(status: AgentStatus, cx: &App) -> Hsla {
-    let t = cx.theme();
+    // The theme's primary / warning / success unless its `muxal.status` zone
+    // names its own, as palettes whose accent equals their warning do.
+    let colors = crate::theme::zones(cx).status;
     match status {
-        AgentStatus::Working => t.primary,
-        AgentStatus::Idle => t.muted_foreground,
-        AgentStatus::Blocked => t.warning,
-        AgentStatus::Done => t.success,
+        AgentStatus::Working => colors.working,
+        AgentStatus::Idle => cx.theme().muted_foreground,
+        AgentStatus::Blocked => colors.input,
+        AgentStatus::Done => colors.done,
     }
 }
 
@@ -901,6 +904,44 @@ fn nodrag(el: impl IntoElement) -> Div {
         .flex()
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(el)
+}
+
+/// A hairline between groups of top-bar controls, so each group reads as one
+/// scope (launch, saved prompts, active pane, projects, views, app).
+fn bar_separator(cx: &App) -> Div {
+    div()
+        .flex_none()
+        .w(px(1.0))
+        .h(px(16.0))
+        .mx_1()
+        .bg(cx.theme().border)
+}
+
+/// Sidebar status for an agent row. A loud status (working, input, a result
+/// from the last day — see `muxal_core::agent_status_emphasis`) keeps the
+/// filled pill; a quiet one (idle, stale, an old result) recedes to plain
+/// muted text so a long list of resting panes doesn't read as a wall of badges.
+fn sidebar_status(status: AgentStatus, label: String, loud: bool, cx: &App) -> AnyElement {
+    if !loud {
+        return div()
+            .text_size(rems(0.75))
+            .whitespace_nowrap()
+            .text_color(cx.theme().muted_foreground)
+            .child(label)
+            .into_any_element();
+    }
+    status_tag(status, label, cx).into_any_element()
+}
+
+/// True for a title that is a filesystem path (a shell pane's working
+/// directory). Its distinguishing part is the tail, so it truncates from the
+/// start.
+fn title_is_path(title: &str) -> bool {
+    // Common shell prompts set `user@host: dir`, which leaves a leading space
+    // once the prefix is stripped.
+    let title = title.trim();
+    (title.starts_with('/') || title.starts_with("~/") || title.starts_with("./") || title == "~")
+        && !title.contains(' ')
 }
 
 /// A small status pill for an agent.
@@ -2218,6 +2259,10 @@ pub struct MuxalApp {
     /// Open per-file diff windows, keyed by (project id, repo-relative path), so
     /// re-clicking a file focuses its window instead of opening a duplicate.
     diff_file_windows: HashMap<(GitSource, String), WindowHandle<gpui_component::Root>>,
+    /// The sidebar project row under the pointer: its row actions (memory,
+    /// pin, files) are shown only there and on the active project, so the
+    /// name and branch keep the row's width everywhere else.
+    hovered_project: Option<Uuid>,
     /// File-browser (second sidebar) state.
     show_file_browser: bool,
     file_browser_pid: Option<Uuid>,
@@ -4203,6 +4248,7 @@ impl MuxalApp {
             sidebar_collapsed: false,
             secondary_sidebar_shown: HashSet::new(),
             fullscreen_sidebar_revealed: false,
+            hovered_project: None,
             show_file_browser: false,
             file_browser_pid: None,
             file_browser_root_override: None,
@@ -6942,6 +6988,11 @@ impl MuxalApp {
     /// the agent's deliberate "I need you" signal (e.g. Claude on a permission
     /// prompt), so it's precise — no guessing from idle time.
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // The overview reads each terminal's screen when it paints, so repaint
+        // it every tick to keep its previews current.
+        if self.show_dashboard {
+            cx.notify();
+        }
         // Remember the grid each pane settled at, so a restart respawns its program
         // already at the right size instead of resizing it after its first paint —
         // which a re-attached tmux session shows as visibly wrong spacing until the
@@ -14172,22 +14223,38 @@ impl MuxalApp {
                 // px-sized glyphs (agent icons, pin) track it too.
                 let strip_scale = self.settings.tab_strip_height / 28.0;
                 let sz = self.strip_btn_size();
+                let btn_px = self.strip_icon_btn_px(cx);
+                let icon_sz = gpui_component::Size::Size(btn_px);
                 let su = strip_scale * (f32::from(cx.theme().font_size) / 16.0);
                 let max_icon = if self.maximized.is_some_and(|m| tabs.contains(&m)) {
                     IconName::Minimize
                 } else {
                     IconName::Maximize
                 };
+                // The controls sit in groups — layout (splits), this pane's
+                // actions, window (maximize / pop out), then Close on its own —
+                // with a gap between groups so a near miss lands on empty
+                // header instead of a neighbouring action, and Close is never
+                // adjacent to anything.
+                let group_gap = || div().flex_none().w(rems(0.5 * strip_scale));
+                let has_pane_actions = kind == InstanceKind::Terminal
+                    || kind == InstanceKind::Diff
+                    || self.handoff_available(iid)
+                    || self
+                        .editors
+                        .get(&iid)
+                        .is_some_and(|e| e.read(cx).is_renderable());
                 let controls = div()
                     .flex_none()
                     .flex()
                     .items_center()
-                    .gap(rems(0.0625 * strip_scale))
+                    .gap(rems(0.125 * strip_scale))
+                    .pr(rems(0.125 * strip_scale))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .child(
                         Button::new(SharedString::from(format!("split-h-{sid}")))
                             .ghost()
-                            .with_size(sz)
+                            .with_size(icon_sz)
                             .icon(IconName::PanelRight)
                             .tooltip(t("Split right; right-click to choose a pane"))
                             .on_click(cx.listener(move |this, _e, window, cx| {
@@ -14214,7 +14281,7 @@ impl MuxalApp {
                     .child(
                         Button::new(SharedString::from(format!("split-v-{sid}")))
                             .ghost()
-                            .with_size(sz)
+                            .with_size(icon_sz)
                             .icon(IconName::PanelBottom)
                             .tooltip(t("Split down; right-click to choose a pane"))
                             .on_click(cx.listener(move |this, _e, window, cx| {
@@ -14238,10 +14305,12 @@ impl MuxalApp {
                                 }),
                             ),
                     )
+                    .child(group_gap())
                     .children(self.handoff_available(iid).then(|| {
                         Button::new(SharedString::from(format!("handoff-{sid}")))
                             .ghost()
                             .with_size(sz)
+.h(btn_px)
                             .label(self.handoff_button_label(iid))
                             .selected(self.handoff_ready(iid))
                             .tooltip(t("Prepare or review a handoff to a fresh agent pane"))
@@ -14256,6 +14325,7 @@ impl MuxalApp {
                         Button::new(SharedString::from(format!("auto-{sid}")))
                             .ghost()
                             .with_size(sz)
+.h(btn_px)
                             .selected(on)
                             .label(t("Auto"))
                             .tooltip(if on {
@@ -14270,7 +14340,7 @@ impl MuxalApp {
                     .children((kind == InstanceKind::Terminal).then(|| {
                         Button::new(SharedString::from(format!("diff-{sid}")))
                             .ghost()
-                            .with_size(sz)
+                            .with_size(icon_sz)
                             .icon(Icon::empty().path("icons/diff.svg"))
                             .tooltip(t("Show changes (git diff)"))
                             .on_click(cx.listener(move |this, _e, window, cx| {
@@ -14280,8 +14350,8 @@ impl MuxalApp {
                     .children((kind == InstanceKind::Diff).then(|| {
                         Button::new(SharedString::from(format!("refresh-{sid}")))
                             .ghost()
-                            .with_size(sz)
-                            .label("↻")
+                            .with_size(icon_sz)
+                            .icon(Icon::empty().path("icons/refresh.svg"))
                             .tooltip(t("Refresh diff"))
                             .on_click(cx.listener(move |this, _e, window, cx| {
                                 this.refresh_diff_pane(iid, window, cx)
@@ -14297,6 +14367,7 @@ impl MuxalApp {
                                 Button::new(SharedString::from(format!("md-{sid}")))
                                     .ghost()
                                     .with_size(sz)
+.h(btn_px)
                                     .label(if rendered { t("Raw") } else { t("Rendered") })
                                     .tooltip(if rendered {
                                         t("Show raw text")
@@ -14310,10 +14381,11 @@ impl MuxalApp {
                                     }))
                             }),
                     )
+                    .children(has_pane_actions.then(group_gap))
                     .child(
                         Button::new(SharedString::from(format!("max-{sid}")))
                             .ghost()
-                            .with_size(sz)
+                            .with_size(icon_sz)
                             .icon(max_icon)
                             .tooltip(t("Maximize"))
                             .on_click(
@@ -14323,17 +14395,18 @@ impl MuxalApp {
                     .child(
                         Button::new(SharedString::from(format!("popout-{sid}")))
                             .ghost()
-                            .with_size(sz)
+                            .with_size(icon_sz)
                             .icon(IconName::ExternalLink)
                             .tooltip(t("Pop out"))
                             .on_click(cx.listener(move |this, _e, window, cx| {
                                 this.pop_out_instance(iid, window, cx)
                             })),
                     )
+                    .child(group_gap())
                     .child(
                         Button::new(SharedString::from(format!("close-{sid}")))
                             .ghost()
-                            .with_size(sz)
+                            .with_size(icon_sz)
                             .icon(IconName::Close)
                             .tooltip(t("Close"))
                             .on_click(cx.listener(move |this, _e, window, cx| {
@@ -14356,7 +14429,8 @@ impl MuxalApp {
                     .iter()
                     .enumerate()
                     .map(|(i, &tab)| {
-                        let tab_title = self.instance_title(tab, cx);
+                        let tab_title =
+                            self.title_in_project(tab, self.instance_title(tab, cx), cx);
                         let tab_program =
                             self.workspace.instance(tab).and_then(|i| i.program.clone());
                         let tab_active = tab == iid;
@@ -14371,6 +14445,17 @@ impl MuxalApp {
                         } else {
                             header_text
                         };
+                        // Status where you look: the agent icon takes its pane's
+                        // status color (as in the sidebar), and the shown tab's
+                        // underline turns to it when the agent wants you.
+                        let pill_text = if pill_on_terminal {
+                            zones.terminal_foreground
+                        } else if tab_active {
+                            cx.theme().foreground
+                        } else {
+                            header_text
+                        };
+                        let tab_status = self.pane_status(tab, cx);
                         let tab_resumable = tab_is_terminal && self.resume_capable(tab);
                         let tab_pinned = self
                             .workspace
@@ -14420,32 +14505,45 @@ impl MuxalApp {
                                 .into_any_element();
                         }
 
+                        let status_mark = |status: AgentStatus| {
+                            crate::theme::legible_on(status_hsla(status, cx), pill_bg, pill_text)
+                        };
+                        // Only a loud status colors the tab (a day-old result
+                        // rests here exactly as it does in the sidebar).
+                        let tab_status = tab_status.filter(|&status| self.status_loud(tab, status));
+                        let agent_icon_color = match tab_status {
+                            Some(status) => status_mark(status),
+                            None => pill_icon,
+                        };
+                        let underline = match tab_status {
+                            Some(status @ (AgentStatus::Blocked | AgentStatus::Done)) => {
+                                status_mark(status)
+                            }
+                            _ => cx.theme().primary,
+                        };
                         let pill_ghost = tab_title.clone();
                         let pill = div()
                             .id(SharedString::from(format!("tab-{}", tab.simple())))
                             .flex()
                             .items_center()
                             .gap_1()
-                            .px_1()
+                            .pl_2()
+                            .pr_1()
                             .h_full()
-                            .max_w(px(180.0));
+                            // Wide enough that a lone tab shows its whole title;
+                            // tabs still shrink to share a crowded strip.
+                            .max_w(px(280.0));
                         // The active tab gets a themed (accent) underline so the
                         // selection is obvious at a glance without an oversized box;
                         // the others keep just the right divider between pills.
                         let pill = if tab_active {
-                            pill.border_b_1().border_color(cx.theme().primary)
+                            pill.border_b_2().border_color(underline)
                         } else {
                             pill.border_r_1().border_color(cx.theme().border)
                         };
                         pill.bg(pill_bg)
                             .text_xs()
-                            .text_color(if pill_on_terminal {
-                                zones.terminal_foreground
-                            } else if tab_active {
-                                cx.theme().foreground
-                            } else {
-                                header_text
-                            })
+                            .text_color(pill_text)
                             .cursor_pointer()
                             // Click switches to this tab.
                             .on_click(cx.listener(move |this, _e, window, cx| {
@@ -14532,7 +14630,7 @@ impl MuxalApp {
                                     let menu = if tab_resumable {
                                         menu.item(
                                             PopupMenuItem::new(t("Restart agent"))
-                                                .icon(IconName::Play)
+                                                .icon(Icon::empty().path("icons/rotate-ccw.svg"))
                                                 .on_click(window.listener_for(
                                                     &entity,
                                                     move |this, _, window, cx| {
@@ -14575,7 +14673,7 @@ impl MuxalApp {
                                         let entity_sn = entity.clone();
                                         let snips = snippets.clone();
                                         menu.submenu_with_icon(
-                                            Some(Icon::new(IconName::SquareTerminal)),
+                                            Some(Icon::new(IconName::CaseSensitive)),
                                             t("Send snippet"),
                                             window,
                                             cx,
@@ -14676,12 +14774,16 @@ impl MuxalApp {
                                 {
                                     svg()
                                         .path("icons/spider.svg")
-                                        .size(px(12.0 * su))
+                                        .size(px(14.0 * su))
                                         .text_color(pill_icon)
                                         .into_any_element()
                                 } else {
-                                    agent_icon(tab_program.as_deref(), px(12.0 * su), pill_icon)
-                                        .into_any_element()
+                                    agent_icon(
+                                        tab_program.as_deref(),
+                                        px(14.0 * su),
+                                        agent_icon_color,
+                                    )
+                                    .into_any_element()
                                 },
                             )
                             // A tab in a worktree always shows its color dot.
@@ -14700,16 +14802,22 @@ impl MuxalApp {
                                     .flex_none()
                                     .text_color(pill_icon)
                             }))
-                            .child(
-                                div()
+                            .child({
+                                let title = div()
                                     .flex_1()
                                     .min_w_0()
                                     .pl_1()
                                     .overflow_hidden()
-                                    .whitespace_nowrap()
-                                    .text_ellipsis()
-                                    .child(tab_title),
-                            )
+                                    .whitespace_nowrap();
+                                // Same rule as the sidebar: a working directory
+                                // keeps its last folder.
+                                if title_is_path(&tab_title) {
+                                    title.text_ellipsis_start()
+                                } else {
+                                    title.text_ellipsis()
+                                }
+                                .child(tab_title)
+                            })
                             .child(
                                 // stop_propagation so closing a tab isn't a focus/drag.
                                 div()
@@ -14777,7 +14885,7 @@ impl MuxalApp {
                     .child(
                         Button::new(SharedString::from(format!("newtab-{sid}")))
                             .ghost()
-                            .with_size(sz)
+                            .with_size(icon_sz)
                             .icon(IconName::Plus)
                             .tooltip(t("New tab"))
                             .on_click(cx.listener(move |this, _e, window, cx| {
@@ -15347,99 +15455,6 @@ impl MuxalApp {
             .into_any_element()
     }
 
-    fn render_dashboard(&self, cx: &mut Context<Self>) -> AnyElement {
-        let mut container = div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .p_4()
-            .bg(cx.theme().background)
-            .child(
-                div()
-                    .text_lg()
-                    .text_color(cx.theme().foreground)
-                    .child(t("All agents")),
-            );
-
-        for project in &self.workspace.projects {
-            let pid = project.id;
-            let mut card = div()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .p_3()
-                .bg(cx.theme().sidebar)
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().foreground)
-                        .child(project.name.clone()),
-                );
-            for iid in project.instances() {
-                let inst = self.workspace.instance(iid);
-                let title = inst
-                    .map(|i| i.display_name().to_string())
-                    .unwrap_or_default();
-                let program = inst.and_then(|i| i.program.clone());
-                let status = self.terminals.get(&iid).map(|v| {
-                    persisted_status(
-                        v.read(cx).status(),
-                        inst,
-                        self.restoring_activity.contains(&iid),
-                    )
-                });
-                let color = status
-                    .map(|s| status_hsla(s, cx))
-                    .unwrap_or(cx.theme().muted_foreground);
-                card = card.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .pl(px(10.0))
-                        .py_1()
-                        .cursor_pointer()
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, _ev, window, cx| {
-                                this.show_dashboard = false;
-                                this.select_project(pid, window, cx);
-                                this.focus_instance(iid, window, cx);
-                            }),
-                        )
-                        .child(agent_icon(program.as_deref(), px(15.0), color))
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().foreground)
-                                .child(title),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(
-                                    status
-                                        .zip(inst)
-                                        .map(|(status, instance)| {
-                                            localized_activity_label(
-                                                status,
-                                                &instance.activity,
-                                                chrono::Utc::now().timestamp_millis(),
-                                            )
-                                        })
-                                        .unwrap_or_else(|| status_label(status).to_string()),
-                                ),
-                        ),
-                );
-            }
-            container = container.child(card);
-        }
-
-        container.into_any_element()
-    }
-
     /// A sidebar subcategory header for a worktree: color dot + name. Double-click
     /// (or the context menu) renames it; the menu can also start an agent in it.
     fn sidebar_worktree_subheader(
@@ -15662,7 +15677,7 @@ impl MuxalApp {
             .child(
                 div()
                     .flex_1()
-                    .text_xs()
+                    .text_size(rems(0.875))
                     .font_semibold()
                     .text_color(muted)
                     .child(t("NOTIFICATIONS")),
@@ -15681,20 +15696,12 @@ impl MuxalApp {
                     )
             }));
 
-        let mut section = div().flex().flex_col().child(header);
-
+        // An empty feed takes no room: the section appears with its first
+        // notification and leaves again when the last one is dismissed.
         if !has {
-            return section.child(
-                div()
-                    .ml_2()
-                    .mr_1()
-                    .px_2()
-                    .py_1()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(t("No notifications")),
-            );
+            return div();
         }
+        let mut section = div().flex().flex_col().child(header);
 
         // Newest first.
         for n in self.notifications.iter().rev() {
@@ -16275,6 +16282,16 @@ impl MuxalApp {
                 .cloned()
                 .unwrap_or_default();
             let drop_hl = cx.theme().sidebar_accent;
+            // Row actions appear on the active project and under the pointer;
+            // elsewhere only an action whose state is on stays visible.
+            let show_actions = active || self.hovered_project == Some(pid);
+            let pinned = self.workspace.pin_slot(pid).is_some();
+            let memory_open = self.show_memory && self.memory_pid == Some(pid);
+            let files_open = self.show_file_browser && self.file_browser_pid == Some(pid);
+            let row_tooltip: SharedString = match &current_branch {
+                Some(b) => format!("{} — {b}", project.name).into(),
+                None => project.name.clone().into(),
+            };
             let chevron = if collapsed {
                 IconName::ChevronRight
             } else {
@@ -16312,7 +16329,15 @@ impl MuxalApp {
                         )
                         .child(Icon::new(chevron).small()),
                 )
-                .child(Icon::new(IconName::Folder).small());
+                .on_hover(cx.listener(move |this, hovered: &bool, _w, cx| {
+                    if *hovered {
+                        this.hovered_project = Some(pid);
+                        cx.notify();
+                    } else if this.hovered_project == Some(pid) {
+                        this.hovered_project = None;
+                        cx.notify();
+                    }
+                }));
             let row = if renaming {
                 base.on_key_down(cx.listener(|this, ev: &KeyDownEvent, _w, cx| {
                     if ev.keystroke.key == "escape" {
@@ -16341,16 +16366,23 @@ impl MuxalApp {
                     .child(
                         // Name + the repo's current branch (cached) with a branch icon.
                         div()
+                            .id(SharedString::from(format!("proj-label-{ix}")))
+                            .tooltip(move |window, cx| {
+                                gpui_component::tooltip::Tooltip::new(row_tooltip.clone())
+                                    .build(window, cx)
+                            })
                             .flex_1()
                             .min_w_0()
                             .flex()
                             .items_center()
-                            .gap_1()
+                            .gap_2()
                             .child(
-                                // Name yields/truncates; the branch chip at the end
-                                // stays full.
+                                // The name is what identifies the row, so it keeps
+                                // its width: it grows into free space and gives way
+                                // only after the branch has (see the shrink factors).
                                 div()
-                                    .flex_1()
+                                    .flex_grow(1.0)
+                                    .flex_shrink(1.0)
                                     .min_w_0()
                                     .overflow_hidden()
                                     .whitespace_nowrap()
@@ -16360,7 +16392,11 @@ impl MuxalApp {
                             .children(self.project_branches.get(&pid).cloned().flatten().map(
                                 |b| {
                                     div()
-                                        .flex_none()
+                                        // A long branch name truncates long before the
+                                        // project name does; the full text is in the
+                                        // row's tooltip.
+                                        .flex_shrink(12.0)
+                                        .min_w_0()
                                         .flex()
                                         .items_center()
                                         .gap_1()
@@ -16378,11 +16414,18 @@ impl MuxalApp {
                                                 .flex_none()
                                                 .text_color(cx.theme().muted_foreground),
                                         )
-                                        .child(div().whitespace_nowrap().child(b))
+                                        .child(
+                                            div()
+                                                .min_w_0()
+                                                .overflow_hidden()
+                                                .whitespace_nowrap()
+                                                .text_ellipsis()
+                                                .child(b),
+                                        )
                                 },
                             )),
                     )
-                    .children(memory_on.then(|| {
+                    .children((memory_on && (show_actions || memory_open)).then(|| {
                         div()
                             .flex_none()
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -16390,15 +16433,15 @@ impl MuxalApp {
                                 Button::new(SharedString::from(format!("memory-{ix}")))
                                     .ghost()
                                     .xsmall()
-                                    .icon(IconName::Star)
-                                    .selected(self.show_memory && self.memory_pid == Some(pid))
+                                    .icon(IconName::BookOpen)
+                                    .selected(memory_open)
                                     .tooltip(t("Project memory"))
                                     .on_click(cx.listener(move |this, _e, window, cx| {
                                         this.toggle_memory_panel(pid, window, cx)
                                     })),
                             )
                     }))
-                    .child(
+                    .children((show_actions || pinned).then(|| {
                         // Pin to the top-bar project switcher (slots 1-4).
                         div()
                             .flex_none()
@@ -16408,8 +16451,8 @@ impl MuxalApp {
                                     .ghost()
                                     .xsmall()
                                     .icon(Icon::empty().path("icons/pin.svg"))
-                                    .selected(self.workspace.pin_slot(pid).is_some())
-                                    .tooltip(if self.workspace.pin_slot(pid).is_some() {
+                                    .selected(pinned)
+                                    .tooltip(if pinned {
                                         t("Unpin from the top bar")
                                     } else {
                                         t("Pin to the top bar")
@@ -16417,9 +16460,9 @@ impl MuxalApp {
                                     .on_click(cx.listener(move |this, _e, _w, cx| {
                                         this.toggle_pin_project(pid, cx)
                                     })),
-                            ),
-                    )
-                    .child(
+                            )
+                    }))
+                    .children((show_actions || files_open).then(|| {
                         div()
                             .flex_none()
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -16428,16 +16471,13 @@ impl MuxalApp {
                                     .ghost()
                                     .xsmall()
                                     .icon(Icon::empty().path("icons/files.svg"))
-                                    .selected(
-                                        self.show_file_browser
-                                            && self.file_browser_pid == Some(pid),
-                                    )
+                                    .selected(files_open)
                                     .tooltip(t("File browser"))
                                     .on_click(cx.listener(move |this, _e, window, cx| {
                                         this.toggle_file_browser(pid, window, cx)
                                     })),
-                            ),
-                    )
+                            )
+                    }))
                     .on_drag(DragProject { from: ix }, move |_, offset, _, cx| {
                         let label = name.clone();
                         cx.new(move |_| DragGhost { label, offset })
@@ -16500,7 +16540,7 @@ impl MuxalApp {
                                 .separator()
                                 .item(
                                     PopupMenuItem::new(t("Open shared memory"))
-                                        .icon(IconName::Star)
+                                        .icon(IconName::BookOpen)
                                         .on_click(window.listener_for(
                                             &entity,
                                             move |this, _, window, cx| {
@@ -16878,7 +16918,10 @@ impl MuxalApp {
                         Some(c) => c,
                         None => app_title,
                     };
+                    let display = self.title_in_project(iid, display.into(), cx).to_string();
+                    let loud = self.status_loud(iid, status);
                     let ghost_label: SharedString = display.clone().into();
+                    let path_title = title_is_path(&display);
                     let is_sel = self.active_instance == Some(iid);
                     let renaming = self.rename == Some(RenameTarget::Instance(iid))
                         && self.rename_origin == Some(RenameOrigin::InstanceSidebar);
@@ -16909,11 +16952,15 @@ impl MuxalApp {
                             agent_icon(
                                 program.as_deref(),
                                 px(15.0),
+                                // A quiet status (idle, an old result) leaves
+                                // the icon neutral, like its label.
                                 status_hsla(
                                     if loading {
                                         AgentStatus::Working
-                                    } else {
+                                    } else if loud {
                                         status
+                                    } else {
+                                        AgentStatus::Idle
                                     },
                                     cx,
                                 ),
@@ -16960,27 +17007,34 @@ impl MuxalApp {
                                     this.select_instance(iid, window, cx);
                                 }
                             }))
-                            .child(
-                                div()
+                            .child({
+                                let title = div()
                                     .flex_1()
                                     .min_w_0()
                                     .overflow_hidden()
                                     .whitespace_nowrap()
-                                    .text_ellipsis()
                                     .text_size(rems(0.875))
-                                    .text_color(cx.theme().sidebar_foreground)
-                                    .child(display),
-                            )
+                                    .text_color(cx.theme().sidebar_foreground);
+                                // A working directory is told apart by its last
+                                // folder, so keep the tail and drop the head.
+                                if path_title {
+                                    title.text_ellipsis_start()
+                                } else {
+                                    title.text_ellipsis()
+                                }
+                                .child(display)
+                            })
                             .children(inst.is_none_or(|i| i.kind != InstanceKind::Spider).then(
                                 || {
                                     div().flex_none().child(if loading {
-                                        status_tag(
+                                        sidebar_status(
                                             AgentStatus::Working,
                                             t("loading").to_string(),
+                                            true,
                                             cx,
                                         )
                                     } else {
-                                        status_tag(
+                                        sidebar_status(
                                             status,
                                             inst.map(|instance| {
                                                 localized_activity_label(
@@ -16992,6 +17046,7 @@ impl MuxalApp {
                                             .unwrap_or_else(|| {
                                                 status_label(Some(status)).to_string()
                                             }),
+                                            loud,
                                             cx,
                                         )
                                     })
@@ -17104,11 +17159,14 @@ impl MuxalApp {
             )
     }
 
-    /// The pane/agent controls (preset split-button, Run task, Loops, Snippets,
-    /// tmux/worktree/restart/close, git-diff). Shared by the merged top bar and
-    /// the standalone toolbar. Every control is wrapped in [`nodrag`] so a click
-    /// never reaches the title bar's window-drag handler.
-    fn toolbar_controls(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The pane/agent controls, in groups split by [`bar_separator`]: launch
+    /// (preset split-button + its tmux/worktree options), saved prompts (Run
+    /// task, Loops, Snippets), the focused pane (Restart), and the pinned
+    /// projects. Shared by the merged top bar and the standalone toolbar, which
+    /// also takes the git-diff toggle (`with_git_diff`). Every control is
+    /// wrapped in [`nodrag`] so a click never reaches the title bar's
+    /// window-drag handler.
+    fn toolbar_controls(&self, with_git_diff: bool, cx: &mut Context<Self>) -> impl IntoElement {
         // Preset split-button: the body opens a new pane with the current
         // preset; the caret picks the active preset / sets the default.
         let current = self.current_agent_preset();
@@ -17167,7 +17225,24 @@ impl MuxalApp {
                         )
                     }),
             ))
-            .child(div().w(px(6.0)))
+            // How new agents launch sits beside the button that launches them.
+            .child(nodrag(
+                Button::new("toggle-tmux")
+                    .ghost()
+                    .icon(IconName::SquareTerminal)
+                    .selected(self.use_tmux)
+                    .tooltip(t("New agents run in a tmux session"))
+                    .on_click(cx.listener(|this, _ev, _window, cx| this.toggle_tmux(cx))),
+            ))
+            .child(nodrag(
+                Button::new("toggle-worktree")
+                    .ghost()
+                    .icon(Icon::empty().path("icons/git-branch.svg"))
+                    .selected(self.use_worktree)
+                    .tooltip(t("New agents get a git worktree"))
+                    .on_click(cx.listener(|this, _ev, _window, cx| this.toggle_worktree(cx))),
+            ))
+            .child(bar_separator(cx))
             .child(nodrag(
                 Button::new("run-task")
                     .ghost()
@@ -17202,7 +17277,7 @@ impl MuxalApp {
                 Button::new("snippets-btn")
                     .ghost()
                     .small()
-                    .icon(IconName::SquareTerminal)
+                    .icon(IconName::CaseSensitive)
                     .label(t("Snippets"))
                     .tooltip(t("Type a saved snippet into the active pane"))
                     .on_mouse_down(
@@ -17213,47 +17288,18 @@ impl MuxalApp {
                         }),
                     ),
             ))
-            .child(div().w(px(6.0)))
-            .child(nodrag(
-                Button::new("toggle-tmux")
-                    .ghost()
-                    .icon(IconName::SquareTerminal)
-                    .selected(self.use_tmux)
-                    .tooltip(t("Run in a tmux session"))
-                    .on_click(cx.listener(|this, _ev, _window, cx| this.toggle_tmux(cx))),
-            ))
-            .child(nodrag(
-                Button::new("toggle-worktree")
-                    .ghost()
-                    .icon(Icon::empty().path("icons/git-branch.svg"))
-                    .selected(self.use_worktree)
-                    .tooltip(t("Create a git worktree"))
-                    .on_click(cx.listener(|this, _ev, _window, cx| this.toggle_worktree(cx))),
-            ))
+            .child(bar_separator(cx))
+            // Acts on the focused pane. (Closing lives on each pane's own header.)
             .child(nodrag(
                 Button::new("restart")
                     .ghost()
-                    .icon(IconName::Play)
+                    .icon(Icon::empty().path("icons/rotate-ccw.svg"))
                     .disabled(!self.active_is_terminal())
                     .tooltip(t("Restart agent"))
                     .on_click(cx.listener(|this, _ev, window, cx| this.restart_active(window, cx))),
             ))
-            .child(nodrag(
-                Button::new("close")
-                    .ghost()
-                    .icon(IconName::Close)
-                    .tooltip(t("Close pane"))
-                    .on_click(cx.listener(|this, _ev, window, cx| this.close_active(window, cx))),
-            ))
-            .child(nodrag(
-                Button::new("toggle-git-diff")
-                    .ghost()
-                    .icon(Icon::empty().path("icons/diff.svg"))
-                    .selected(self.show_git_diff)
-                    .tooltip(t("Git diff"))
-                    .on_click(cx.listener(|this, _ev, _w, cx| this.toggle_git_diff(cx))),
-            ))
-            // Four pinned-project slots, same size as the git-diff button: click
+            .child(bar_separator(cx))
+            // Four pinned-project slots, same size as the other icon buttons: click
             // switches, right-click unpins. Empty slots stay visible (dimmed) so
             // the numbering never shifts under muscle memory.
             .children((0..4usize).map(|slot| {
@@ -17290,6 +17336,27 @@ impl MuxalApp {
                         ),
                 )
             }))
+            .children(with_git_diff.then(|| {
+                div()
+                    .flex()
+                    .items_center()
+                    .child(bar_separator(cx))
+                    .child(self.git_diff_toggle(cx))
+            }))
+    }
+
+    /// The git-diff side panel's toggle. The panel opens on the right, so the
+    /// main window keeps this with the other view toggles at the right of the
+    /// top bar.
+    fn git_diff_toggle(&self, cx: &mut Context<Self>) -> Div {
+        nodrag(
+            Button::new("toggle-git-diff")
+                .ghost()
+                .icon(Icon::empty().path("icons/diff.svg"))
+                .selected(self.show_git_diff)
+                .tooltip(t("Git diff"))
+                .on_click(cx.listener(|this, _ev, _w, cx| this.toggle_git_diff(cx))),
+        )
     }
 
     /// The standalone pane toolbar (kept for popped-out project windows, which
@@ -17309,7 +17376,7 @@ impl MuxalApp {
                 MouseButton::Left,
                 cx.listener(|this, _e: &MouseDownEvent, window, cx| this.deselect_pane(window, cx)),
             )
-            .child(self.toolbar_controls(cx))
+            .child(self.toolbar_controls(true, cx))
     }
 
     /// The Ctrl+P search palette: a filter box + a results list (files in the
@@ -17740,7 +17807,7 @@ impl MuxalApp {
                                     .child(workspace_name),
                             )
                     })
-                    .child(self.toolbar_controls(cx))
+                    .child(self.toolbar_controls(false, cx))
                     .child(div().flex_1())
                     .child(
                         div()
@@ -17759,15 +17826,9 @@ impl MuxalApp {
                                         this.open_search_palette(window, cx)
                                     })),
                             ))
-                            .child(nodrag(
-                                Button::new("workspaces")
-                                    .ghost()
-                                    .icon(IconName::CircleUser)
-                                    .tooltip(t("Switch workspace"))
-                                    .on_click(cx.listener(|this, _ev, _window, cx| {
-                                        this.open_workspace_selector(cx)
-                                    })),
-                            ))
+                            .child(bar_separator(cx))
+                            // Views of the current work…
+                            .child(self.git_diff_toggle(cx))
                             .child(nodrag(
                                 Button::new("dashboard")
                                     .ghost()
@@ -17778,6 +17839,8 @@ impl MuxalApp {
                                         this.toggle_dashboard(cx)
                                     })),
                             ))
+                            .child(bar_separator(cx))
+                            // …then the app itself.
                             .child(nodrag(
                                 Button::new("notifications")
                                     .ghost()
@@ -17786,6 +17849,15 @@ impl MuxalApp {
                                     .tooltip(t("Notifications"))
                                     .on_click(cx.listener(|this, _ev, _window, cx| {
                                         this.toggle_notifications(cx)
+                                    })),
+                            ))
+                            .child(nodrag(
+                                Button::new("workspaces")
+                                    .ghost()
+                                    .icon(IconName::GalleryVerticalEnd)
+                                    .tooltip(t("Switch workspace"))
+                                    .on_click(cx.listener(|this, _ev, _window, cx| {
+                                        this.open_workspace_selector(cx)
                                     })),
                             ))
                             .child(nodrag(
@@ -18876,7 +18948,122 @@ impl MuxalApp {
         cx.notify();
     }
 
-    /// Button/icon size class for the tab strip: grows in steps with the strip
+    /// Lifecycle status of a terminal pane as every surface shows it (sidebar,
+    /// tab, overview): a pane still starting reads as working, and a finished
+    /// turn stays done until the agent works again. `None` for anything that
+    /// isn't a live terminal.
+    pub(super) fn pane_status(&self, iid: Uuid, cx: &App) -> Option<AgentStatus> {
+        let view = self.terminals.get(&iid)?;
+        if self.terminal_is_loading(iid, cx) {
+            return Some(AgentStatus::Working);
+        }
+        Some(persisted_status(
+            view.read(cx).status(),
+            self.workspace.instance(iid),
+            self.restoring_activity.contains(&iid),
+        ))
+    }
+
+    /// Whether a pane's status is drawn at full strength. One rule for the
+    /// sidebar, tabs, and overview: `muxal_core::agent_status_emphasis`.
+    pub(super) fn status_loud(&self, iid: Uuid, status: AgentStatus) -> bool {
+        match self.workspace.instance(iid) {
+            Some(inst) => {
+                muxal_core::agent_status_emphasis(
+                    activity_state(status),
+                    &inst.activity,
+                    chrono::Utc::now().timestamp_millis(),
+                ) == muxal_core::StatusEmphasis::Loud
+            }
+            None => status != AgentStatus::Idle,
+        }
+    }
+
+    /// A pane's title as it reads inside its own project (sidebar row, tab,
+    /// overview tile). A shell titled by its working directory would repeat
+    /// the project's path there, so at the project (or worktree) root it shows
+    /// its preset name, and below the root the path relative to it. Custom
+    /// names, agent titles, and directories outside the project are unchanged.
+    pub(super) fn title_in_project(
+        &self,
+        iid: Uuid,
+        title: SharedString,
+        cx: &App,
+    ) -> SharedString {
+        let Some(inst) = self.workspace.instance(iid) else {
+            return title;
+        };
+        let project = self
+            .workspace
+            .projects
+            .iter()
+            .find(|p| p.instances().contains(&iid));
+        match self.shell_place_in(iid, project, &title) {
+            Some(muxal_core::ShellPlace::Root) => {
+                // Several shells at the same root would all read alike, so
+                // they are numbered in layout order: Shell, Shell 2, Shell 3.
+                let earlier = project
+                    .map(|p| p.instances())
+                    .unwrap_or_default()
+                    .into_iter()
+                    .take_while(|&other| other != iid)
+                    .filter(|&other| {
+                        self.workspace
+                            .instance(other)
+                            .is_some_and(|o| o.title == inst.title)
+                            && self.shell_place_in(other, project, &self.instance_title(other, cx))
+                                == Some(muxal_core::ShellPlace::Root)
+                    })
+                    .count();
+                if earlier == 0 {
+                    inst.title.clone().into()
+                } else {
+                    format!("{} {}", inst.title, earlier + 1).into()
+                }
+            }
+            Some(muxal_core::ShellPlace::Inside(rel)) => rel.into(),
+            None => title,
+        }
+    }
+
+    /// Where a pane's working-directory title sits under its worktree (if it
+    /// has one) or its project. `None` for a custom-named pane, a title that
+    /// isn't a directory, or a directory outside both.
+    fn shell_place_in(
+        &self,
+        iid: Uuid,
+        project: Option<&Project>,
+        title: &str,
+    ) -> Option<muxal_core::ShellPlace> {
+        let inst = self.workspace.instance(iid)?;
+        if inst
+            .custom_name
+            .as_deref()
+            .is_some_and(|c| !c.trim().is_empty())
+        {
+            return None;
+        }
+        let home = home_dir();
+        let worktree_root = inst
+            .worktree_id
+            .and_then(|wid| self.workspace.worktree(wid))
+            .map(|w| w.path.as_path());
+        worktree_root
+            .into_iter()
+            .chain(project.map(|p| p.root_path.as_path()))
+            .find_map(|root| muxal_core::shell_place(title, root, home.as_deref()))
+    }
+
+    /// Side of a tab-strip icon button, in pixels: the strip's height less a
+    /// small margin, so the buttons (and their icons, three quarters of the
+    /// side) fill the bar that is already there instead of floating in it.
+    /// Follows the strip-height setting continuously and the UI zoom.
+    fn strip_icon_btn_px(&self, cx: &App) -> Pixels {
+        let side = (self.settings.tab_strip_height - 6.0).clamp(16.0, 34.0);
+        px(side * f32::from(cx.theme().font_size) / 16.0)
+    }
+
+    /// Button/icon size class for the tab strip's text buttons: grows in steps with the strip
     /// height setting so the strip's controls scale up with the bar (classes
     /// stay rem-based, so UI zoom keeps scaling them too).
     fn strip_btn_size(&self) -> gpui_component::Size {
@@ -19238,7 +19425,7 @@ impl MuxalApp {
                 .py_1()
                 .rounded(cx.theme().radius)
                 .text_color(fg)
-                .child(Icon::new(IconName::SquareTerminal).small())
+                .child(Icon::new(IconName::CaseSensitive).small())
                 .child(div().flex_1().min_w_0().text_sm().child(name))
                 // A small return glyph marks snippets that auto-submit (press Enter).
                 .children(submit.then(|| {
@@ -20914,7 +21101,7 @@ impl MuxalApp {
                 .on_click(cx.listener(move |this, _e, window, cx| {
                     this.open_snippet_editor(idx, window, cx)
                 }))
-                .child(Icon::new(IconName::SquareTerminal).small())
+                .child(Icon::new(IconName::CaseSensitive).small())
                 .child(div().flex_1().min_w_0().text_sm().child(s.name.clone()))
                 .children(s.submit.then(|| {
                     div()
@@ -21878,7 +22065,7 @@ impl Render for MuxalApp {
                 .cloned()
         });
         let main_content: AnyElement = if self.show_dashboard {
-            self.render_dashboard(cx)
+            self.render_overview(cx)
         } else if let Some(leaf) = maximized_here {
             self.render_pane(&leaf, cx)
         } else {
@@ -22266,7 +22453,7 @@ mod grok_session_tests {
 mod shell_title_tests {
     use super::{
         agent_minted_session_gone, authoritative_terminal_auto_title, codex_session_auto_title,
-        session_id_bound_elsewhere, shell_dir_title, terminal_auto_title,
+        session_id_bound_elsewhere, shell_dir_title, terminal_auto_title, title_is_path,
         validated_codex_session_id,
     };
     use muxal_core::{AgentPreset, Instance};
@@ -22280,6 +22467,11 @@ mod shell_title_tests {
             shell_dir_title("ryan@zen-rhel:~/Projects/Bot/phBot"),
             "~/Projects/Bot/phBot"
         );
+        // The stripped remainder of `user@host: dir` still counts as a path.
+        assert!(title_is_path(" ~/dev/muxal"));
+        assert!(title_is_path("/srv/app"));
+        assert!(!title_is_path("Fix the /login route"));
+        assert!(!title_is_path("vim notes.md"));
         // No `user@host` prefix → unchanged (bare path or a running command).
         assert_eq!(shell_dir_title("~/Projects"), "~/Projects");
         assert_eq!(shell_dir_title("make build"), "make build");

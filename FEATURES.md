@@ -46,6 +46,20 @@ feature is added or changed, update the matching entry here in the same change**
   remain. While a pane is maximized, selecting another agent (sidebar,
   notification, tray) moves the maximize to it, so that agent comes up full-size
   instead of hiding behind.
+- **Overview** — the top bar's dashboard button swaps the pane area for a live
+  grid of every agent and shell in the workspace, grouped by project in layout
+  order. Each tile is a small pane: the agent icon in its status color, title,
+  status badge with age, and the bottom ten rows of its terminal as plain text,
+  refreshed once a second. A header counts panes needing input, working, and
+  done; a tile whose agent is waiting on you is outlined. Click a tile to jump
+  to that pane. Nothing is read or refreshed while the overview is closed.
+- **Strip controls fill the bar** — the header's icon buttons are sized from the
+  tab-strip height (its height less a small margin) instead of a fixed small
+  class, so icons are larger without the strip growing. A tab can be up to
+  280px wide, so a lone tab shows its whole title; tabs still shrink to share.
+- **Grouped pane controls** — a pane header's buttons sit in spaced groups:
+  splits, the pane's own actions (Handoff, Auto, diff), maximize / pop out, and
+  Close set apart on its own, so a near miss doesn't hit a neighbouring action.
 - **Pane cards** — rounded "card" panes with an accent ring + glow on the active
   pane, hover highlight, and a configurable border style.
 
@@ -181,7 +195,12 @@ feature is added or changed, update the matching entry here in the same change**
 
 - **Real lifecycle badges** — each pane shows **working**, **idle**, **input**,
   or **done**, color-coded (blue / gray / amber / green) on the tab pill, sidebar
-  icon, dashboard, and notification dots. A marker-based agent whose turn finishes
+  icon, overview, and notification dots. On a tab, the agent icon takes the
+  status color and the shown tab's underline turns amber or green when the agent
+  needs input or has finished, so a pane you can see tells you it wants you
+  without a look at the sidebar. A status color that would blend into the header
+  it sits on (an accent-colored icon on an accent-colored focused header) is
+  lightened or darkened until it reads. A marker-based agent whose turn finishes
   is held at **done** until the agent works again — even if it never rang the bell —
   and that completion survives a muxal restart. Focusing the pane marks its
   notification read without rewriting lifecycle state or age. Sidebar badges include
@@ -436,7 +455,8 @@ feature is added or changed, update the matching entry here in the same change**
   focused — no toast pops over the app you're already looking at (the in-app feed
   still records it). Clicking the notification raises muxal and jumps to the pane
   that fired it.
-- **In-app NOTIFICATIONS sidebar** — a category above PROJECTS collecting agent
+- **In-app NOTIFICATIONS sidebar** — a category above PROJECTS (shown only while
+  it has entries; an empty feed takes no sidebar room) collecting agent
   events **and** all app messages (git results and save errors —
   workspace, settings, workspace list, project memory, and layout backups —
   everything that used to be a pop-up toast goes here instead; persistent save
@@ -591,7 +611,7 @@ feature is added or changed, update the matching entry here in the same change**
   clamps do not save over those widths or proportions; enlarging the window or
   reopening a sidebar restores its preference. Divider dragging updates the
   preference, and double-clicking a center divider makes its split equal.
-- **Git diff panel** — a toolbar button (far right) toggles a collapsible
+- **Git diff panel** — a top-bar button (right side, beside the dashboard) toggles a collapsible
   right-side panel with two tabs:
   - **Files** — the active project's changed files (added / modified / deleted /
     renamed / untracked, color-coded). Click a file to open its diff in a dedicated
@@ -616,9 +636,8 @@ feature is added or changed, update the matching entry here in the same change**
 
 ## Sidebar & projects
 
-- **Project pinning** — pin up to four projects to numbered slots (1–4) beside
-  the git-diff button in the top bar, and switch between them with the sidebar
-  closed. Click a slot to switch; right-click it (or use the pin icon on a
+- **Project pinning** — pin up to four projects to numbered slots (1–4) in the
+  top bar, and switch between them with the sidebar closed. Click a slot to switch; right-click it (or use the pin icon on a
   sidebar project row) to unpin. Slots are stable — an emptied slot just goes
   dim, nothing renumbers. `Alt+P` / `Alt+Shift+P` cycle the pins (rebindable in
   Settings → Keybindings). Pins persist per workspace.
@@ -627,8 +646,30 @@ feature is added or changed, update the matching entry here in the same change**
   screen (the muxal mark, an **Add a project** folder picker, and the
   keyboard-shortcuts chord) in the work area until the first project is added.
 - **Project list** — projects with live per-agent status rows; collapse a project.
+  A shell pane's title doesn't repeat its project: at the project (or worktree)
+  root it shows its preset name (`Shell`; further shells at the same root are
+  numbered in layout order — `Shell 2`, `Shell 3`), below the root the relative path
+  (`./server/src`), and only a directory outside the project shows in full —
+  the same in the sidebar, on tabs, and in the overview. Path titles truncate
+  from the start, keeping the last folder visible.
+- **Attention fades with age** — one rule decides how strongly a status is drawn
+  everywhere (sidebar badge and icon, tab icon and underline, overview tile and
+  counts). Working and input are always loud: status color and a filled badge.
+  A finished turn is loud for a day; once its age is counted in days
+  (`done · 2d`) it rests as plain muted text with a neutral icon, and after
+  three days it reads `stale · 16d`, the same as an idle pane of that age. The
+  underlying lifecycle is unchanged — the turn is still recorded as done.
+- **Working time** — a working badge shows how long the current stretch of work
+  has run once it passes a minute (`working · 40m`), so a stuck agent stands out
+  from one that just started. The clock restarts whenever the agent starts
+  working again after input, completion, or a pause.
 - **Branch label** — each project row shows its git repo's current branch with a
-  branch icon (refreshed live).
+  branch icon (refreshed live). The project name keeps the row's width: a long
+  branch name truncates first, and hovering the row shows both in full.
+- **Row actions on demand** — a project row's memory, pin, and file-browser
+  buttons show on the active project and on the row under the pointer. Elsewhere
+  only a button whose state is on stays visible (a pinned project keeps its pin,
+  an open file browser or memory panel keeps its button).
 - **Project git** — right-click a git project for: git diff (opens the diff pane;
   local projects), switch branch (submenu), new branch, commit, pull, push, fetch,
   and stash / pop / drop stash; each runs off the main thread and toasts its
@@ -701,8 +742,9 @@ feature is added or changed, update the matching entry here in the same change**
 - **Themes** — 24 curated choices: Default Light/Dark, Gruvbox Light/Dark,
   Ayu Light/Dark, Catppuccin Latte/Frappe, Alduin, Everforest Dark,
   Fahrenheit, Molokai Dark, Spaceduck, Tokyo Dark, Twilight Grey, Liquid
-  Spaceglass, Porcelain, Ember Observatory, Mainframe, Clay Dark, Verdigris,
-  Rosewood, and Ledger Light/Dark. Fahrenheit adds red accents;
+  Spaceglass, Porcelain, Flight Deck, Mainframe, Clay Dark, Verdigris,
+  Rosewood, and Ledger Light/Dark. Flight Deck replaces Ember Observatory
+  (saved Ember selections move to it). Fahrenheit adds red accents;
   Spaceduck pairs plum surfaces with golden focus accents, orchid, and turquoise;
   Tokyo Dark adds electric blue, ice-cyan active tabs, and sakura-pink syntax on
   deep indigo. Tokyo consolidates the former Night/Storm/Moon variants (saved
@@ -720,8 +762,14 @@ feature is added or changed, update the matching entry here in the same change**
   Terminals are a deep warm ink inside a lighter stone frame, with a terracotta
   header on the focused pane. An optional dark theme; it keeps the normal
   interface fonts and layout.
+- **Distinct status colors** — a theme's `muxal.status` zone can name its own
+  working / input / done colors when its accent, warning, and success colors
+  don't tell them apart. Gruvbox Dark and Light (accent and warning were the
+  same gold) now use Gruvbox's blue, orange, and green; Spaceduck uses orchid,
+  gold, and turquoise. Buttons and other accents keep the theme's colors. A
+  test fails any bundled theme whose three statuses are too close in hue.
 - **Theme zones** — Verdigris, Mainframe, Clay Dark, Ledger, Ledger Dark, Rosewood,
-  Ember Observatory, and Ayu Dark color
+  Flight Deck, and Ayu Dark color
   each part of the window independently: the terminal (background, text, and all
   sixteen ANSI colors), the gaps behind panes, focused and unfocused pane headers,
   and soft status badges. Terminal color queries report the terminal's own colors,
@@ -751,11 +799,17 @@ feature is added or changed, update the matching entry here in the same change**
   rendered inside the app, independent of desktop transparency or compositor blur;
   explicit terminal application backgrounds still paint normally.
 - **Original palettes** — Porcelain fills the cool-light gap with blue-white
-  surfaces, petrol-blue controls, and copper syntax accents. Ember Observatory
-  pairs a night-sky terminal and indigo-violet frame with a burnt-coal top bar and
-  a glowing ember header on the focused pane; waiting agents read rose and finished
-  ones jade. Each has coordinated editor, terminal ANSI, selection, status, and
-  chrome colors.
+  surfaces, petrol-blue controls, and copper syntax accents, with coordinated
+  editor, terminal ANSI, selection, status, and chrome colors.
+- **Flight Deck** — an instrument panel: black-glass terminals set in a
+  steel-grey frame that is lighter than any other dark theme's, under a dark
+  glareshield top bar. Color follows glass-cockpit convention — magenta for what
+  you are commanding (focus, the focused pane's header, keywords), cyan for an
+  agent at work, amber for one needing input, green for one that has finished —
+  so status and accent never share a color.
+- **Molokai Dark readability** — secondary labels (branch names, idle status,
+  hints) are light enough to read and the sidebar is a shade off the background
+  instead of identical to it. Every other Molokai color is unchanged.
 - **Keyboard-confirmable dialogs** — every warning/confirmation dialog (close
   tab/pane, quit, pop-out close, delete confirms) takes keyboard focus the
   moment it opens: **Enter confirms, Escape cancels**, no mouse needed. Focus
@@ -869,10 +923,14 @@ feature is added or changed, update the matching entry here in the same change**
   Wayland compositors with `xdg-decoration`), instead of painting a duplicate
   set. On compositors that force client-side decorations (e.g. GNOME Wayland)
   muxal draws its own controls so buttons are never missing. The in-app top bar
-  is a single merged row: pane/agent controls (preset, Run task, Loops,
-  Snippets, tmux/worktree/restart/close, git-diff) starting at the sidebar
-  divider, then Search pushed right alongside the workspace switcher,
-  dashboard, notifications, and Settings (outermost). Merging the old separate
+  is a single merged row of groups split by hairlines. From the sidebar
+  divider: launch (the preset button with its tmux and worktree options beside
+  it), saved prompts (Run task, Loops, Snippets), Restart for the focused pane,
+  and the pinned projects. Pushed right: Search, the view toggles (git diff,
+  dashboard), then notifications, the workspace switcher, updates, and Settings
+  (outermost). Closing a pane is on each pane's own header. Each icon has one
+  meaning: Restart, Snippets, the workspace switcher, and project memory no
+  longer share a glyph with another control. Merging the old separate
   toolbar into the title bar frees a full row of vertical space for panes.
 - **Linux: self-cleaning AppImage mounts** — a muxal instance run from an
   AppImage that crashes or is SIGKILLed can't unmount its squashfuse mount, and a

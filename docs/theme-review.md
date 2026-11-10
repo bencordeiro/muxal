@@ -12,7 +12,7 @@ the fresh-install default; the added theme does not change saved selections.
 | Ayu Dark | Ink terminals, slate-blue frame, citron focus, orange and blue syntax |
 | Catppuccin Latte | Cool light surfaces and pastel blue/purple |
 | Catppuccin Frappe | Blue-gray surfaces and rose/lavender pastels |
-| Ember Observatory | Night-sky terminal, indigo-violet frame, coal top bar, ember focus |
+| Flight Deck | Black-glass terminals in a steel-grey panel, magenta focus, avionics status colors |
 | Everforest Dark | Green-gray surfaces and earthy peach/sage |
 | Fahrenheit | Near-black with red accents |
 | Gruvbox Light | Cream, rust, olive, and earthy colors |
@@ -74,6 +74,49 @@ Verdigris was pushed away from Everforest Dark after a first version measured to
 close in both surface and accent. Each palette was checked for text, status,
 ANSI, syntax, selection, and surface separation; native review remains the owner's.
 
+## Flight Deck replaces Ember Observatory
+
+The owner asked for Ember Observatory to be removed and a new theme of the
+author's choosing in exchange. Saved Ember selections migrate to Flight Deck.
+
+The collection had two unoccupied regions. Every dark theme's chrome sat at or
+below about 20% lightness, and no theme led with magenta-violet (Molokai's accent
+is a crimson pink; Spaceduck's plum is a surface). Flight Deck takes both: a
+steel-grey frame (sidebar 27%, pane headers 32%) around near-black terminals, so
+panes read as displays inset in a panel, and the glass-cockpit color code —
+magenta for the commanded target, cyan for selected/active, amber for caution,
+green for engaged — mapped onto focus, working, input, and done. It is the first
+theme whose working color differs from its accent, using the `muxal.status`
+colors described below. The top bar is the darkest surface, a glareshield over
+the panel.
+
+All 83 measured pairings meet their target: body, sidebar, and terminal text at
+7:1 or better; muted text, button labels, badge text on every surface, all
+sixteen ANSI colors, and every syntax color at 4.5:1; status icons at 3:1 on the
+sidebar, both headers, and the terminal. Its nearest neighbour by surface and
+accent is Catppuccin Frappe, at roughly twice the distance of the closest
+existing pair. Native review is the owner's.
+
+Molokai Dark was tuned without changing its palette: muted text rose from 2.4:1
+to 5.2:1 and the sidebar, previously identical to the background, is one shade
+lighter.
+
+## Status colors
+
+Working, input, and done were always the theme's primary, warning, and success.
+Gruvbox Dark and Light set no warning of their own and their gold accent equals
+the fallback; Spaceduck sets both to the same gold. The `muxal.status` zone now
+takes optional `working` / `input` / `done` colors (the `*_text` values remain
+the soft-badge text), so these palettes keep their accent for buttons and focus
+while status uses three colors from the same palette: Gruvbox blue / orange /
+green, Spaceduck orchid / gold / turquoise. A theme that replaces a status color
+gets soft badges, since the component library's solid badges would still paint
+primary / warning / success. `status_color_tests` fails any bundled theme that
+names all three statuses within 20° of hue of each other; themes that leave
+warning or success to the library default (Alduin, Ayu Light, Catppuccin,
+Everforest, Fahrenheit, Molokai, Twilight Grey) are not covered by it and have
+not been individually reviewed.
+
 ## Theme zones
 
 An audit found that every theme looked painted with one brush: the `background`
@@ -89,8 +132,8 @@ previous color, so themes without the section are unchanged. `background` remain
 the surface for documents and dialogs. These colors are read in `theme.rs` and
 follow the ambience tint. No layout or behavior changes.
 
-Verdigris, Mainframe, Clay Dark, Ledger, Ledger Dark, Rosewood, Ember Observatory,
-and Ayu Dark use zones. Ledger Dark exists because the owner liked Ledger's
+Verdigris, Mainframe, Clay Dark, Ledger, Ledger Dark, Rosewood, Flight Deck (then
+Ember Observatory), and Ayu Dark use zones. Ledger Dark exists because the owner liked Ledger's
 paper-and-ink contrast but avoids light interfaces. Dialogs, more text levels, and
 border levels remain possible follow-ups.
 

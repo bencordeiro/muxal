@@ -267,6 +267,35 @@ add a new `##` category if none fits).
 
 ## Where things stand (update this section when it changes)
 
+**Chrome refinement in dev review (2026-11-09, unreleased):** branch
+`dev/chrome-refinement`; the owner authorized committing this work. Release
+and promotion are not requested. The owner asked for a
+sidebar/top-bar refinement pass and reviews it in `scripts/dev.sh`. Top bar is
+grouped with hairlines (launch + tmux/worktree options, saved prompts, Restart,
+pins; right: Search, git diff + dashboard, then app controls); the duplicate
+top-bar Close pane button is removed; Restart, Snippets, workspaces, and memory
+have their own icons. Sidebar: project name outranks the branch chip, row
+actions show on the active/hovered row, idle/stale status is plain text, path
+titles truncate from the start, and the empty Notifications section is hidden.
+Follow-ups approved in the same review: pane-header buttons in spaced groups
+with Close apart, strip icon buttons sized from the strip height
+(`strip_icon_btn_px`), tabs up to 280px, status color on tab icon + underline
+(`MuxalApp::pane_status`, `theme::legible_on` contrast guard), and the dashboard
+replaced by the live overview grid (`app/overview.rs`, repainted by `tick` only
+while open). Status emphasis has one rule, `muxal_core::agent_status_emphasis`
+(working/input always loud; done loud for a day, then quiet; labels and
+lifecycle untouched) applied in sidebar, tabs, and overview via
+`MuxalApp::status_loud`. Shell titles inside their project use
+`muxal_core::shell_place` via `title_in_project` (root → preset name, subfolder
+→ `./rel`, several root shells numbered); palette, tray, and notifications keep
+full titles. Labels: working shows elapsed time after a minute; a done turn
+three days old reads `stale` (lifecycle still Done). `muxal.status` may set
+`working`/`input`/`done` colors — Gruvbox ×2 and Spaceduck do — with a hue-gap
+test over bundled themes; seven legacy themes that rely on library-default
+warning/success are unreviewed for status collisions. The owner is considering turning Loops into a single-lane timed
+prompt queue; **on hold — do not start it unasked.** Visual acceptance is the owner's;
+commit, release, and promotion each need their approval.
+
 **v0.5.8 published and promoted (2026-11-09):** The owner authorized the
 corrective release and explicitly approved updating installed main. Published
 tag `v0.5.8` is at `a3a2d52`; the published v0.5.7 tag remains unchanged at
@@ -316,7 +345,11 @@ manual native Mac GUI/playback review remain unverified.
 - Optional theme `muxal` zones independently color terminal/ANSI, floor, divider,
   focused/idle headers, idle border, and soft status text, with previous-color
   fallbacks and ambience tint. Verdigris, Mainframe, Clay Dark, Ledger, Ledger
-  Dark, Rosewood, Ember Observatory, and Ayu Dark use zones: 24 public themes.
+  Dark, Rosewood, Flight Deck, and Ayu Dark use zones: 24 public themes.
+  Flight Deck (steel panel, black-glass terminals, magenta focus, cyan/amber/green
+  status) replaced Ember Observatory at the owner's request; saved Ember
+  selections migrate to it. Molokai Dark keeps its colors — the owner likes them;
+  only muted text and the sidebar shade were tuned.
   Ayu Light is unchanged. Mainframe keeps neutral surfaces and labels; green is
   reserved for text/accents, with distinct working/input/done colors. The owner
   required colors only: no layout or structural changes. Theme JSON is the source

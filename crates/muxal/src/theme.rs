@@ -185,12 +185,20 @@ struct TerminalSpec {
     ansi: Option<[String; 16]>,
 }
 
-/// Text colors for soft, tinted status badges. Omitted: solid badges.
-#[derive(Clone, Deserialize)]
+/// Status colors. `working` / `input` / `done` set the status color itself
+/// (icons, tab underline, badge tint), for a palette whose accent, warning,
+/// and success colors don't tell the three apart; omitted, they stay the
+/// theme's primary / warning / success. The `*_text` values are the text on
+/// soft, tinted badges; with neither kind set, badges stay solid.
+#[derive(Clone, Default, Deserialize)]
+#[serde(default)]
 struct StatusSpec {
-    working_text: String,
-    input_text: String,
-    done_text: String,
+    working: Option<String>,
+    input: Option<String>,
+    done: Option<String>,
+    working_text: Option<String>,
+    input_text: Option<String>,
+    done_text: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -207,7 +215,8 @@ struct ZoneTheme {
 struct ZoneSpecs(HashMap<String, ZoneSpec>);
 impl Global for ZoneSpecs {}
 
-/// Text colors for soft status badges, resolved for the active theme.
+/// One color per status, resolved for the active theme (the status colors
+/// themselves, or the text on soft badges).
 #[derive(Clone, Copy)]
 pub struct SoftStatus {
     pub working: Hsla,
@@ -233,6 +242,8 @@ pub struct Zones {
     /// True when the terminal's light/dark sense is opposite the app's, so
     /// elements drawn on it can't reuse the app's text colors.
     pub terminal_inverted: bool,
+    /// The color of each status: icons, tab underlines, badge tints.
+    pub status: SoftStatus,
     pub soft_status: Option<SoftStatus>,
 }
 impl Global for Zones {}
@@ -254,6 +265,9 @@ struct ZoneBase {
     title_bar: Hsla,
     secondary: Hsla,
     muted_foreground: Hsla,
+    primary: Hsla,
+    warning: Hsla,
+    success: Hsla,
     ansi: [Hsla; 16],
     is_dark: bool,
 }
@@ -269,6 +283,9 @@ fn zone_base(cx: &App) -> ZoneBase {
         title_bar: t.title_bar,
         secondary: t.secondary,
         muted_foreground: t.muted_foreground,
+        primary: t.primary,
+        warning: t.warning,
+        success: t.success,
         ansi: [
             t.muted,            // 0  black (~ subtle bg)
             t.red,              // 1  red
@@ -317,13 +334,30 @@ fn resolve_zones(spec: Option<&ZoneSpec>, base: &ZoneBase, strength: f32) -> Zon
             .and_then(|ansi| zone_color(&ansi[i], strength))
             .unwrap_or(base.ansi[i])
     });
-    let soft_status = spec.status.as_ref().and_then(|status| {
-        Some(SoftStatus {
-            working: zone_color(&status.working_text, strength)?,
-            input: zone_color(&status.input_text, strength)?,
-            done: zone_color(&status.done_text, strength)?,
-        })
-    });
+    let status_spec = spec.status.clone().unwrap_or_default();
+    let status = SoftStatus {
+        working: pick(&status_spec.working, base.primary),
+        input: pick(&status_spec.input, base.warning),
+        done: pick(&status_spec.done, base.success),
+    };
+    let text = |value: &Option<String>| value.as_deref().and_then(|v| zone_color(v, strength));
+    let overrides_status =
+        status_spec.working.is_some() || status_spec.input.is_some() || status_spec.done.is_some();
+    // Badge text: the theme's own, else — when it replaced a status color, so
+    // the component library's solid primary/warning/success badge would show
+    // the wrong one — the status colors themselves on their tint.
+    let soft_status = match (
+        text(&status_spec.working_text),
+        text(&status_spec.input_text),
+        text(&status_spec.done_text),
+    ) {
+        (Some(working), Some(input), Some(done)) => Some(SoftStatus {
+            working,
+            input,
+            done,
+        }),
+        _ => overrides_status.then_some(status),
+    };
     Zones {
         floor: pick(&spec.floor, base.background),
         divider: pick(&spec.divider, base.border),
@@ -338,6 +372,7 @@ fn resolve_zones(spec: Option<&ZoneSpec>, base: &ZoneBase, strength: f32) -> Zon
         terminal_selection: pick(&spec.terminal.selection, base.selection),
         terminal_ansi,
         terminal_inverted: base.is_dark == (terminal_background.l > 0.5),
+        status,
         soft_status,
     }
 }
@@ -445,8 +480,9 @@ pub fn apply_theme(name: &str, cx: &mut App) {
     }
 }
 
-/// Preserve saved choices when variants are consolidated. Removed palettes
-/// still use the startup fallback, without reappearing in the picker.
+/// Preserve saved choices when variants are consolidated or a palette is
+/// replaced. Other removed palettes use the startup fallback, without
+/// reappearing in the picker.
 fn canonical_theme_name(name: &str) -> &str {
     match name {
         "" | "Default Dark" => DEFAULT_DARK_THEME,
@@ -454,6 +490,8 @@ fn canonical_theme_name(name: &str) -> &str {
         "Tokyo Night" | "Tokyo Storm" | "Tokyo Moon" => "Tokyo Dark",
         "Twilight" => "Twilight Grey",
         "Catppuccin Macchiato" | "Catppuccin Mocha" => "Catppuccin Frappe",
+        // Flight Deck took Ember Observatory's place in the collection.
+        "Ember Observatory" => "Flight Deck",
         _ => name,
     }
 }
@@ -492,6 +530,151 @@ pub fn palette_from_theme(cx: &App) -> TerminalPalette {
     }
 }
 
+/// WCAG relative luminance of a color (alpha ignored).
+fn luminance(color: Hsla) -> f32 {
+    let rgb: gpui::Rgba = color.into();
+    let lin = |c: f32| {
+        if c <= 0.03928 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * lin(rgb.r) + 0.7152 * lin(rgb.g) + 0.0722 * lin(rgb.b)
+}
+
+/// WCAG contrast ratio between two colors, 1.0 (identical) to 21.0.
+pub fn contrast(a: Hsla, b: Hsla) -> f32 {
+    let (la, lb) = (luminance(a), luminance(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+}
+
+/// The least contrast a status mark needs against the surface it sits on
+/// (WCAG's 3:1 for graphics).
+const MARK_CONTRAST: f32 = 3.0;
+
+/// `color` made visible on `surface`. Status colors are chosen against the
+/// app's own surfaces, but a mark can land on any zone — a "working" icon in
+/// the accent color on a focused header painted in that same accent would
+/// vanish. A color that already stands out is returned untouched; otherwise
+/// its lightness moves away from the surface (hue and saturation kept) until
+/// it does, ending at `fallback` — a color known to read on that surface.
+pub fn legible_on(color: Hsla, surface: Hsla, fallback: Hsla) -> Hsla {
+    if contrast(color, surface) >= MARK_CONTRAST {
+        return color;
+    }
+    let lighten = luminance(fallback) >= luminance(surface);
+    let mut c = color;
+    for _ in 0..8 {
+        c.l = if lighten {
+            c.l + (1.0 - c.l) * 0.3
+        } else {
+            c.l * 0.7
+        };
+        if contrast(c, surface) >= MARK_CONTRAST {
+            return c;
+        }
+    }
+    fallback
+}
+
+#[cfg(test)]
+mod status_color_tests {
+    use super::ThemeAssets;
+    use gpui::{Hsla, Rgba};
+
+    /// Working, input, and done must be told apart by color alone. Checked
+    /// for every bundled theme that names all three (its `muxal.status` zone,
+    /// else its own primary / warning / success); a theme that leaves one to
+    /// the component library's default is skipped.
+    #[test]
+    fn every_theme_tells_its_three_statuses_apart() {
+        const MIN_HUE_GAP: f32 = 20.0;
+        let mut checked = 0;
+        for file in ThemeAssets::iter() {
+            let data = ThemeAssets::get(&file).unwrap().data;
+            let set: serde_json::Value = serde_json::from_slice(&data).unwrap();
+            for theme in set["themes"].as_array().unwrap() {
+                let name = theme["name"].as_str().unwrap();
+                let pick = |zone: &str, key: &str| -> Option<Hsla> {
+                    let value = theme["muxal"]["status"][zone]
+                        .as_str()
+                        .or_else(|| theme["colors"][key].as_str())?;
+                    Some(Rgba::try_from(value).ok()?.into())
+                };
+                let (Some(working), Some(input), Some(done)) = (
+                    pick("working", "primary.background"),
+                    pick("input", "warning.background"),
+                    pick("done", "success.background"),
+                ) else {
+                    continue;
+                };
+                checked += 1;
+                let gap = |a: Hsla, b: Hsla| {
+                    let d = (a.h - b.h).abs() * 360.0;
+                    d.min(360.0 - d)
+                };
+                for (what, a, b) in [
+                    ("working/input", working, input),
+                    ("working/done", working, done),
+                    ("input/done", input, done),
+                ] {
+                    assert!(
+                        gap(a, b) >= MIN_HUE_GAP,
+                        "{name}: {what} are only {:.0}° of hue apart",
+                        gap(a, b)
+                    );
+                }
+            }
+        }
+        assert!(
+            checked >= 14,
+            "only {checked} themes named all three statuses"
+        );
+    }
+}
+
+#[cfg(test)]
+mod legibility_tests {
+    use super::{MARK_CONTRAST, contrast, legible_on};
+    use gpui::{Hsla, Rgba};
+
+    fn color(hex: &str) -> Hsla {
+        Rgba::try_from(hex).unwrap().into()
+    }
+
+    #[test]
+    fn a_color_that_already_reads_is_untouched() {
+        let blue = color("#7aa2f7");
+        let dark = color("#1a1b26");
+        assert_eq!(legible_on(blue, dark, color("#ffffff")), blue);
+    }
+
+    #[test]
+    fn an_accent_on_its_own_header_is_moved_until_it_reads() {
+        // Clay Dark's terracotta accent on a terracotta focused header.
+        let accent = color("#d97757");
+        let header = color("#c96a4c");
+        let text = color("#faf9f5");
+        assert!(contrast(accent, header) < MARK_CONTRAST);
+        let fixed = legible_on(accent, header, text);
+        assert!(contrast(fixed, header) >= MARK_CONTRAST);
+        // Still the same hue, only lighter.
+        assert!((fixed.h - accent.h).abs() < 0.01);
+        assert!(fixed.l > accent.l);
+    }
+
+    #[test]
+    fn a_light_surface_darkens_the_color_instead() {
+        let amber = color("#f5c542");
+        let paper = color("#f4efe4");
+        let ink = color("#2b2a27");
+        let fixed = legible_on(amber, paper, ink);
+        assert!(contrast(fixed, paper) >= MARK_CONTRAST);
+        assert!(fixed.l < amber.l);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{DEFAULT_DARK_THEME, ThemeAssets, canonical_theme_name, display_theme_name};
@@ -516,9 +699,9 @@ mod tests {
             "Ayu Light",
             "Catppuccin Frappe",
             "Catppuccin Latte",
-            "Ember Observatory",
             "Everforest Dark",
             "Fahrenheit",
+            "Flight Deck",
             "Gruvbox Dark",
             "Gruvbox Light",
             "Mainframe",
@@ -585,6 +768,9 @@ mod zone_tests {
             title_bar: color("#202020"),
             secondary: color("#303030"),
             muted_foreground: color("#999999"),
+            primary: color("#3366ff"),
+            warning: color("#ffaa00"),
+            success: color("#33cc66"),
             ansi: std::array::from_fn(|_| color("#777777")),
             is_dark,
         }
@@ -645,6 +831,26 @@ mod zone_tests {
             let set: ZoneFile = serde_json::from_slice(&asset.data).unwrap();
             for theme in set.themes {
                 let Some(spec) = theme.muxal else { continue };
+                // Whatever status colors a theme names must parse.
+                let status = spec.status.clone().unwrap_or_default();
+                for value in [
+                    &status.working,
+                    &status.input,
+                    &status.done,
+                    &status.working_text,
+                    &status.input_text,
+                    &status.done_text,
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    assert!(zone_color(value, 0.0).is_some(), "{}: {value}", theme.name);
+                }
+                // A theme may use the zone for status colors alone; one that
+                // themes any surface must theme all of them.
+                if spec.floor.is_none() && spec.terminal.background.is_none() {
+                    continue;
+                }
                 for value in [
                     &spec.floor,
                     &spec.divider,

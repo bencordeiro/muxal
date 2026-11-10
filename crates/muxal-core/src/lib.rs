@@ -16,6 +16,7 @@ pub mod locale;
 pub mod memory;
 pub mod music;
 mod pane;
+mod place;
 pub mod search;
 mod shell;
 pub mod spider;
@@ -42,6 +43,7 @@ pub use pane::{
     move_into_split, move_into_tabs, move_pane_beside, move_tab_to, remove, set_active_tab,
     set_split_sizes, set_tab_order, split, split_beside, swap_instances, swap_panes,
 };
+pub use place::{ShellPlace, shell_place};
 pub use shell::{join_words, sh_quote, split_words};
 pub use worktree::Worktree;
 
@@ -197,8 +199,22 @@ pub fn agent_activity_label(
     now: i64,
 ) -> String {
     match status {
-        AgentActivityState::Working => "working".to_string(),
-        AgentActivityState::Done => state_with_age("done", activity.completed_at, now),
+        // How long this stretch of work has run, once it passes a minute — a
+        // stuck agent and a quick one otherwise look identical. Only a start
+        // that is the latest lifecycle event counts as this stretch's start.
+        AgentActivityState::Working => state_with_age(
+            "working",
+            activity
+                .work_started_at
+                .filter(|at| Some(*at) == activity.last_lifecycle_at()),
+            now,
+        ),
+        // A result nobody has returned to for days is simply stale, the same
+        // as an idle pane of that age. The lifecycle state is still Done.
+        AgentActivityState::Done => match age_millis(activity.completed_at, now) {
+            Some(age) if age >= STALE_AFTER_MS => format!("stale · {}d", age / DAY_MS),
+            _ => state_with_age("done", activity.completed_at, now),
+        },
         AgentActivityState::Blocked => state_with_age("blocked", activity.blocked_at, now),
         AgentActivityState::Idle => {
             let Some(age) = age_millis(activity.last_lifecycle_at(), now) else {
@@ -210,12 +226,41 @@ pub fn agent_activity_label(
                 format!("idle · {}m", age / MINUTE_MS)
             } else if age < 6 * HOUR_MS {
                 format!("idle · {}h", age / HOUR_MS)
-            } else if age < 3 * DAY_MS {
+            } else if age < STALE_AFTER_MS {
                 "idle".to_string()
             } else {
                 format!("stale · {}d", age / DAY_MS)
             }
         }
+    }
+}
+
+/// How strongly a pane's status is drawn, wherever it is drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StatusEmphasis {
+    /// Full status color and a filled badge: something is happening, is
+    /// waiting on the user, or finished recently.
+    Loud,
+    /// Plain muted text: nothing here needs a look right now.
+    Quiet,
+}
+
+/// The emphasis a status deserves. Attention fades with age: work in progress
+/// and a request for input are always loud; a finished turn is loud for a day
+/// and then rests. The cutoff is the point where [`agent_activity_label`]
+/// starts counting in days, so anything shown in days is quiet.
+pub fn agent_status_emphasis(
+    status: AgentActivityState,
+    activity: &AgentActivity,
+    now: i64,
+) -> StatusEmphasis {
+    match status {
+        AgentActivityState::Working | AgentActivityState::Blocked => StatusEmphasis::Loud,
+        AgentActivityState::Idle => StatusEmphasis::Quiet,
+        AgentActivityState::Done => match age_millis(activity.completed_at, now) {
+            Some(age) if age >= DAY_MS => StatusEmphasis::Quiet,
+            _ => StatusEmphasis::Loud,
+        },
     }
 }
 
@@ -237,6 +282,8 @@ fn state_with_age(state: &str, at: Option<i64>, now: i64) -> String {
 const MINUTE_MS: i64 = 60_000;
 const HOUR_MS: i64 = 60 * MINUTE_MS;
 const DAY_MS: i64 = 24 * HOUR_MS;
+/// Age at which a resting pane — idle or finished — reads as stale.
+const STALE_AFTER_MS: i64 = 3 * DAY_MS;
 
 fn age_millis(at: Option<i64>, now: i64) -> Option<i64> {
     at.map(|at| now.saturating_sub(at).max(0))
@@ -245,9 +292,55 @@ fn age_millis(at: Option<i64>, now: i64) -> Option<i64> {
 #[cfg(test)]
 mod agent_activity_tests {
     use super::{
-        AgentActivity, AgentActivityState, DAY_MS, HOUR_MS, Instance, MINUTE_MS,
-        agent_activity_label,
+        AgentActivity, AgentActivityState, DAY_MS, HOUR_MS, Instance, MINUTE_MS, StatusEmphasis,
+        agent_activity_label, agent_status_emphasis,
     };
+
+    #[test]
+    fn attention_fades_with_age_but_never_for_work_or_input() {
+        let now = 100 * DAY_MS;
+        let done_at = |age: i64| AgentActivity {
+            completed_at: Some(now - age),
+            ..AgentActivity::default()
+        };
+        let emphasis =
+            |state, activity: &AgentActivity| agent_status_emphasis(state, activity, now);
+        // A fresh result is loud; once it is counted in days it rests.
+        assert_eq!(
+            emphasis(AgentActivityState::Done, &done_at(20 * HOUR_MS)),
+            StatusEmphasis::Loud
+        );
+        assert_eq!(
+            emphasis(AgentActivityState::Done, &done_at(DAY_MS)),
+            StatusEmphasis::Quiet
+        );
+        assert_eq!(
+            emphasis(AgentActivityState::Done, &done_at(16 * DAY_MS)),
+            StatusEmphasis::Quiet
+        );
+        // An unknown completion time is treated as fresh rather than hidden.
+        assert_eq!(
+            emphasis(AgentActivityState::Done, &AgentActivity::default()),
+            StatusEmphasis::Loud
+        );
+        // A request for input stays loud however long it has waited.
+        let blocked = AgentActivity {
+            blocked_at: Some(now - 9 * DAY_MS),
+            ..AgentActivity::default()
+        };
+        assert_eq!(
+            emphasis(AgentActivityState::Blocked, &blocked),
+            StatusEmphasis::Loud
+        );
+        assert_eq!(
+            emphasis(AgentActivityState::Working, &blocked),
+            StatusEmphasis::Loud
+        );
+        assert_eq!(
+            emphasis(AgentActivityState::Idle, &done_at(MINUTE_MS)),
+            StatusEmphasis::Quiet
+        );
+    }
 
     #[test]
     fn old_instance_json_defaults_activity() {
@@ -431,16 +524,43 @@ mod agent_activity_tests {
     }
 
     #[test]
-    fn done_and_blocked_age_without_expiring() {
+    fn working_shows_how_long_this_stretch_has_run() {
+        let activity = AgentActivity {
+            completed_at: Some(0),
+            work_started_at: Some(HOUR_MS),
+            ..AgentActivity::default()
+        };
+        let label = |now| agent_activity_label(AgentActivityState::Working, &activity, now);
+        assert_eq!(label(HOUR_MS + 30_000), "working");
+        assert_eq!(label(HOUR_MS + 40 * MINUTE_MS), "working · 40m");
+        assert_eq!(label(4 * HOUR_MS), "working · 3h");
+        // A start older than a later completion belongs to an earlier turn.
+        let earlier = AgentActivity {
+            work_started_at: Some(0),
+            completed_at: Some(HOUR_MS),
+            ..AgentActivity::default()
+        };
+        assert_eq!(
+            agent_activity_label(AgentActivityState::Working, &earlier, 5 * HOUR_MS),
+            "working"
+        );
+    }
+
+    #[test]
+    fn an_old_result_reads_stale_while_a_request_for_input_never_expires() {
         let activity = AgentActivity {
             completed_at: Some(100_000),
             blocked_at: Some(200_000),
             ..AgentActivity::default()
         };
+        assert_eq!(
+            agent_activity_label(AgentActivityState::Done, &activity, 2 * DAY_MS + 100_000),
+            "done · 2d"
+        );
         let now = 20 * DAY_MS;
         assert_eq!(
             agent_activity_label(AgentActivityState::Done, &activity, now),
-            "done · 19d"
+            "stale · 19d"
         );
         assert_eq!(
             agent_activity_label(AgentActivityState::Blocked, &activity, now),

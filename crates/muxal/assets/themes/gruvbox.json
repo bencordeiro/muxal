@@ -6,6 +6,16 @@
   "themes": [
     {
       "name": "Gruvbox Light",
+      "muxal": {
+        "status": {
+          "working": "#076678",
+          "input": "#af3a03",
+          "done": "#79740e",
+          "working_text": "#076678",
+          "input_text": "#af3a03",
+          "done_text": "#79740e"
+        }
+      },
       "mode": "light",
       "colors": {
         "accent.background": "#e6d19e",
@@ -156,6 +166,16 @@
     },
     {
       "name": "Gruvbox Dark",
+      "muxal": {
+        "status": {
+          "working": "#83a598",
+          "input": "#fe8019",
+          "done": "#b8bb26",
+          "working_text": "#83a598",
+          "input_text": "#fe8019",
+          "done_text": "#b8bb26"
+        }
+      },
       "mode": "dark",
       "colors": {
         "accent.background": "#303030",

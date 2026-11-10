@@ -6,6 +6,16 @@
   "themes": [
     {
       "name": "Spaceduck",
+      "muxal": {
+        "status": {
+          "working": "#B3A1E6",
+          "input": "#F2CF78",
+          "done": "#72D6AD",
+          "working_text": "#B3A1E6",
+          "input_text": "#F2CF78",
+          "done_text": "#72D6AD"
+        }
+      },
       "mode": "dark",
       "colors": {
         "background": "#151220",
