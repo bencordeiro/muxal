@@ -268,8 +268,10 @@ add a new `##` category if none fits).
 ## Where things stand (update this section when it changes)
 
 **Chrome refinement in dev review (2026-11-09, unreleased):** branch
-`dev/chrome-refinement`; the owner authorized committing this work. Release
-and promotion are not requested. The owner asked for a
+`dev/chrome-refinement`. The design pass is finished and owner-reviewed in dev.
+Committed through `2dc4ced`; theme-picker swatches, the pane `±N` count, sidebar
+peek, and preview-row filtering are in the working tree, gate-clean (654 tests),
+awaiting the owner's commit/push/release instruction. The owner asked for a
 sidebar/top-bar refinement pass and reviews it in `scripts/dev.sh`. Top bar is
 grouped with hairlines (launch + tmux/worktree options, saved prompts, Restart,
 pins; right: Search, git diff + dashboard, then app controls); the duplicate
@@ -282,9 +284,14 @@ with Close apart, strip icon buttons sized from the strip height
 (`strip_icon_btn_px`), tabs up to 280px, status color on tab icon + underline
 (`MuxalApp::pane_status`, `theme::legible_on` contrast guard), and the dashboard
 replaced by the live overview grid (`app/overview.rs`, repainted by `tick` only
-while open). Status emphasis has one rule, `muxal_core::agent_status_emphasis`
-(working/input always loud; done loud for a day, then quiet; labels and
-lifecycle untouched) applied in sidebar, tabs, and overview via
+while open or while a sidebar peek shows; the peek reuses the tile via
+`hover_instance_row`/`render_peek`, main window only, 450 ms delay). Pane
+headers show `±N` uncommitted files from `worktree_changes`, which now also
+holds the active project's checkout keyed by project id. The theme picker
+lists `ThemeChoice` rows with swatches (`theme_swatch`). Tile previews skip
+rule-only rows and collapse blank runs (`preview_rows`). Status emphasis has one
+rule, `muxal_core::agent_status_emphasis` (working/input always loud; done loud
+for a day, then quiet; lifecycle untouched) applied in sidebar, tabs, and overview via
 `MuxalApp::status_loud`. Shell titles inside their project use
 `muxal_core::shell_place` via `title_in_project` (root → preset name, subfolder
 → `./rel`, several root shells numbered); palette, tray, and notifications keep
@@ -292,9 +299,13 @@ full titles. Labels: working shows elapsed time after a minute; a done turn
 three days old reads `stale` (lifecycle still Done). `muxal.status` may set
 `working`/`input`/`done` colors — Gruvbox ×2 and Spaceduck do — with a hue-gap
 test over bundled themes; seven legacy themes that rely on library-default
-warning/success are unreviewed for status collisions. The owner is considering turning Loops into a single-lane timed
-prompt queue; **on hold — do not start it unasked.** Visual acceptance is the owner's;
-commit, release, and promotion each need their approval.
+warning/success are unreviewed for status collisions, and the owner chose to
+keep the remaining themes as they are. Declined in this review — do not
+re-propose: a settings save-model change, overview keyboard navigation, live
+theme preview, project colour markers, a top-bar status summary, and a worktree
+stripe. The owner is considering turning Loops into a single-lane timed prompt
+queue; **on hold — do not start it unasked.** Visual acceptance is the owner's;
+release and promotion each need their approval.
 
 **v0.5.8 published and promoted (2026-11-09):** The owner authorized the
 corrective release and explicitly approved updating installed main. Published

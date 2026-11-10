@@ -50,13 +50,24 @@ feature is added or changed, update the matching entry here in the same change**
   grid of every agent and shell in the workspace, grouped by project in layout
   order. Each tile is a small pane: the agent icon in its status color, title,
   status badge with age, and the bottom ten rows of its terminal as plain text,
-  refreshed once a second. A header counts panes needing input, working, and
+  refreshed once a second. Rows that are only rules or box edges are skipped
+  and repeated blank rows collapse, so the preview holds more of what the agent
+  actually wrote. A header counts panes needing input, working, and
   done; a tile whose agent is waiting on you is outlined. Click a tile to jump
   to that pane. Nothing is read or refreshed while the overview is closed.
+- **Peek on hover** — rest the pointer on an agent's sidebar row for about half
+  a second and that agent's overview tile (status, age, bottom ten rows of its
+  terminal, refreshed each second) floats beside the sidebar at the row's
+  height. It follows the row you are on, goes when the pointer leaves or you
+  click, and never takes focus or clicks. The focused pane has no peek — it is
+  already on screen — and nothing is read until a peek is showing.
 - **Strip controls fill the bar** — the header's icon buttons are sized from the
   tab-strip height (its height less a small margin) instead of a fixed small
   class, so icons are larger without the strip growing. A tab can be up to
   280px wide, so a lone tab shows its whole title; tabs still shrink to share.
+- **Changed-files count** — an agent or shell pane shows `±N` beside its diff
+  button when its checkout (its worktree, or the active project's own) has
+  uncommitted files, refreshed within about ten seconds. It disappears at zero.
 - **Grouped pane controls** — a pane header's buttons sit in spaced groups:
   splits, the pane's own actions (Handoff, Auto, diff), maximize / pop out, and
   Close set apart on its own, so a near miss doesn't hit a neighbouring action.
@@ -762,6 +773,10 @@ feature is added or changed, update the matching entry here in the same change**
   Terminals are a deep warm ink inside a lighter stone frame, with a terracotta
   header on the focused pane. An optional dark theme; it keeps the normal
   interface fonts and layout.
+- **Theme swatches** — each row of the theme picker (and the picker's closed
+  field) shows a miniature of the theme beside its name: a strip of chrome, a
+  pane with its focused header over a terminal with a line of text and a line
+  in the accent color, then the working, input, and done colors as three dots.
 - **Distinct status colors** — a theme's `muxal.status` zone can name its own
   working / input / done colors when its accent, warning, and success colors
   don't tell them apart. Gruvbox Dark and Light (accent and warning were the

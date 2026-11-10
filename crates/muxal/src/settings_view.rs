@@ -96,7 +96,7 @@ pub struct SettingsUi {
     pub proj_name: Entity<InputState>,
 
     // Appearance.
-    pub theme_picker: Entity<SelectState<Vec<SharedString>>>,
+    pub theme_picker: Entity<SelectState<Vec<crate::theme::ThemeChoice>>>,
     pub language_picker: Entity<SelectState<Vec<SharedString>>>,
     pub font_family: Entity<InputState>,
     /// Ambience (cool/warm tint) slider.
@@ -188,7 +188,7 @@ impl SettingsUi {
             selected_project: None,
             proj_name: cx.new(|cx| InputState::new(window, cx).placeholder(t("Project name"))),
             theme_picker: cx
-                .new(|cx| SelectState::new(crate::theme::theme_names(cx), None, window, cx)),
+                .new(|cx| SelectState::new(crate::theme::theme_choices(cx), None, window, cx)),
             language_picker: cx.new(|cx| {
                 let languages = crate::i18n::available_languages()
                     .iter()

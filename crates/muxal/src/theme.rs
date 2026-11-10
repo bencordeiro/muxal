@@ -422,13 +422,182 @@ pub fn register_bundled_themes(cx: &mut App) {
     log::info!("loaded {loaded} bundled theme file(s)");
 }
 
-/// All available theme names, sorted for display in the switcher.
-pub fn theme_names(cx: &App) -> Vec<SharedString> {
+/// The colors that tell one theme from another at a glance, as authored (no
+/// ambience cast): its chrome, a terminal, the focused pane header, the
+/// accent, and the three status colors.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ThemeSwatch {
+    pub chrome: Hsla,
+    pub terminal: Hsla,
+    pub text: Hsla,
+    pub header: Hsla,
+    pub accent: Hsla,
+    pub working: Hsla,
+    pub input: Hsla,
+    pub done: Hsla,
+    pub border: Hsla,
+}
+
+/// Resolve a theme's swatch the way the app resolves the theme itself: zone
+/// colors first, then the theme's own, then the component library's defaults
+/// for its light/dark mode.
+fn theme_swatch(config: &ThemeConfig, zone: Option<&ZoneSpec>) -> ThemeSwatch {
+    let defaults = if config.mode.is_dark() {
+        gpui_component::ThemeColor::dark()
+    } else {
+        gpui_component::ThemeColor::light()
+    };
+    let own = |value: &Option<SharedString>, fallback: Hsla| {
+        value
+            .as_deref()
+            .and_then(|value| zone_color(value, 0.0))
+            .unwrap_or(fallback)
+    };
+    let zoned = |value: Option<&String>, fallback: Hsla| {
+        value
+            .and_then(|value| zone_color(value, 0.0))
+            .unwrap_or(fallback)
+    };
+    let c = &config.colors;
+    let background = own(&c.background, defaults.background);
+    let status = zone.and_then(|z| z.status.as_ref());
+    ThemeSwatch {
+        chrome: own(&c.sidebar, background),
+        terminal: zoned(
+            zone.and_then(|z| z.terminal.background.as_ref()),
+            background,
+        ),
+        text: zoned(
+            zone.and_then(|z| z.terminal.foreground.as_ref()),
+            own(&c.foreground, defaults.foreground),
+        ),
+        header: zoned(
+            zone.and_then(|z| z.focused_header.as_ref()),
+            own(&c.title_bar, defaults.title_bar),
+        ),
+        accent: own(&c.primary, defaults.primary),
+        working: zoned(
+            status.and_then(|s| s.working.as_ref()),
+            own(&c.primary, defaults.primary),
+        ),
+        input: zoned(
+            status.and_then(|s| s.input.as_ref()),
+            own(&c.warning, defaults.warning),
+        ),
+        done: zoned(
+            status.and_then(|s| s.done.as_ref()),
+            own(&c.success, defaults.success),
+        ),
+        border: own(&c.border, defaults.border),
+    }
+}
+
+/// One row of the theme picker: the name beside a miniature of the theme.
+#[derive(Clone)]
+pub struct ThemeChoice {
+    name: SharedString,
+    swatch: ThemeSwatch,
+}
+
+impl ThemeChoice {
+    /// A tiny window — a strip of chrome, then a pane with its focused header
+    /// over a terminal holding one line of text and one in the accent — and
+    /// the working / input / done colors as dots.
+    fn row(&self) -> gpui::Div {
+        use gpui::{ParentElement, Styled, div};
+        let s = self.swatch;
+        let line = |color: Hsla, width: f32| div().h(px(2.0)).w(px(width)).rounded_full().bg(color);
+        let dot = |color: Hsla| div().size(px(7.0)).rounded_full().flex_none().bg(color);
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .w_full()
+            .child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .w(px(46.0))
+                    .h(px(20.0))
+                    .rounded(px(3.0))
+                    .border_1()
+                    .border_color(s.border)
+                    .overflow_hidden()
+                    .child(div().w(px(10.0)).h_full().bg(s.chrome))
+                    .child(
+                        div()
+                            .flex_1()
+                            .h_full()
+                            .flex()
+                            .flex_col()
+                            .child(div().h(px(5.0)).w_full().bg(s.header))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .px(px(4.0))
+                                    .flex()
+                                    .flex_col()
+                                    .justify_center()
+                                    .gap(px(2.0))
+                                    .bg(s.terminal)
+                                    .child(line(s.text, 22.0))
+                                    .child(line(s.accent, 13.0)),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .child(self.name.clone()),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap(px(3.0))
+                    .child(dot(s.working))
+                    .child(dot(s.input))
+                    .child(dot(s.done)),
+            )
+    }
+}
+
+impl gpui_component::select::SelectItem for ThemeChoice {
+    type Value = SharedString;
+
+    fn title(&self) -> SharedString {
+        self.name.clone()
+    }
+
+    fn display_title(&self) -> Option<gpui::AnyElement> {
+        Some(gpui::IntoElement::into_any_element(self.row()))
+    }
+
+    fn render(&self, _: &mut gpui::Window, _: &mut App) -> impl gpui::IntoElement {
+        self.row()
+    }
+
+    fn value(&self) -> &SharedString {
+        &self.name
+    }
+}
+
+/// All available themes with their swatches, sorted for the picker.
+pub fn theme_choices(cx: &App) -> Vec<ThemeChoice> {
+    let zones = cx.try_global::<ZoneSpecs>();
     ThemeRegistry::global(cx)
         .sorted_themes()
         .iter()
         .filter(|c| c.name.as_ref() != "Default Dark")
-        .map(|c| display_theme_name(&c.name).to_string().into())
+        .map(|c| ThemeChoice {
+            name: display_theme_name(&c.name).to_string().into(),
+            swatch: theme_swatch(c, zones.and_then(|z| z.0.get(c.name.as_ref()))),
+        })
         .collect()
 }
 
@@ -576,6 +745,46 @@ pub fn legible_on(color: Hsla, surface: Hsla, fallback: Hsla) -> Hsla {
         }
     }
     fallback
+}
+
+#[cfg(test)]
+mod swatch_tests {
+    use super::{ThemeAssets, ZoneFile, theme_swatch};
+    use gpui::{Hsla, Rgba};
+    use gpui_component::ThemeSet;
+
+    fn color(hex: &str) -> Hsla {
+        Rgba::try_from(hex).unwrap().into()
+    }
+
+    fn swatch(file: &str, name: &str) -> super::ThemeSwatch {
+        let data = ThemeAssets::get(file).unwrap().data;
+        let set: ThemeSet = serde_json::from_slice(&data).unwrap();
+        let zones: ZoneFile = serde_json::from_slice(&data).unwrap();
+        let config = set.themes.iter().find(|t| t.name.as_ref() == name).unwrap();
+        let zone = zones.themes.into_iter().find(|t| t.name == name).unwrap();
+        theme_swatch(config, zone.muxal.as_ref())
+    }
+
+    #[test]
+    fn a_zoned_theme_shows_its_own_terminal_header_and_statuses() {
+        let s = swatch("flight-deck.json", "Flight Deck");
+        assert_eq!(s.chrome, color("#363F49"));
+        assert_eq!(s.terminal, color("#0A0C0F"));
+        assert_eq!(s.header, color("#7B3A8C"));
+        assert_eq!(s.accent, color("#DB7BEB"));
+        assert_eq!(s.working, color("#45D9F0"));
+        assert_ne!(s.working, s.accent);
+    }
+
+    #[test]
+    fn a_theme_without_surface_zones_falls_back_to_its_own_colors() {
+        // Gruvbox Dark names status colors only.
+        let s = swatch("gruvbox.json", "Gruvbox Dark");
+        assert_eq!(s.terminal, color("#1d2021"));
+        assert_eq!(s.accent, color("#d79921"));
+        assert_eq!(s.working, color("#83a598"));
+    }
 }
 
 #[cfg(test)]

@@ -12,6 +12,12 @@ publish the matching version section; older releases remain available on the
   with magenta focus and cyan, amber, and green for working, input, and done.
   It replaces Ember Observatory; a saved Ember Observatory selection switches to
   Flight Deck.
+- Theme picker swatches: each theme is listed with a miniature of its chrome,
+  terminal, focused header, accent, and status colors.
+- Pane headers show `±N` beside the diff button when that pane's checkout has
+  uncommitted files.
+- Peek on hover: resting the pointer on an agent's sidebar row shows a live
+  tile of that agent's terminal beside the sidebar, without switching to it.
 - Overview: the dashboard is now a live grid of every agent across projects.
   Each tile shows status, age, and the bottom rows of that agent's terminal,
   refreshed every second; click one to jump to its pane.
@@ -49,8 +55,7 @@ publish the matching version section; older releases remain available on the
   minute (`working · 40m`).
 - Shell panes no longer repeat their project's path: at the project root they
   show `Shell` (numbered when there are several), in a subfolder the relative
-  path (`./server`). Path titles keep
-  their last folder visible when truncated.
+  path (`./server`). Path titles keep their last folder visible when truncated.
 - The Notifications sidebar section is hidden while empty.
 - Pane header buttons sit in spaced groups, with Close set apart from maximize
   and pop out.

@@ -2263,6 +2263,12 @@ pub struct MuxalApp {
     /// pin, files) are shown only there and on the active project, so the
     /// name and branch keep the row's width everywhere else.
     hovered_project: Option<Uuid>,
+    /// Sidebar peek (see `app/overview.rs`): the agent whose tile is showing
+    /// with the pointer's height when it appeared, the row being waited on,
+    /// and a counter that invalidates a superseded wait.
+    peek: Option<(Uuid, Pixels)>,
+    peek_pending: Option<Uuid>,
+    peek_generation: u64,
     /// File-browser (second sidebar) state.
     show_file_browser: bool,
     file_browser_pid: Option<Uuid>,
@@ -4249,6 +4255,9 @@ impl MuxalApp {
             secondary_sidebar_shown: HashSet::new(),
             fullscreen_sidebar_revealed: false,
             hovered_project: None,
+            peek: None,
+            peek_pending: None,
+            peek_generation: 0,
             show_file_browser: false,
             file_browser_pid: None,
             file_browser_root_override: None,
@@ -6610,11 +6619,24 @@ impl MuxalApp {
             .iter()
             .map(|p| (p.id, p.root_path.clone()))
             .collect();
+        // Change counts: every worktree, plus the active project's own checkout
+        // (keyed by project id) for the count on its panes' diff buttons. Only
+        // the active project, so idle projects cost no `git status`.
         let worktrees: Vec<(Uuid, PathBuf)> = self
             .workspace
             .worktrees
             .iter()
             .map(|w| (w.id, w.path.clone()))
+            .chain(
+                self.workspace
+                    .active()
+                    .filter(|p| {
+                        self.project_branches
+                            .get(&p.id)
+                            .is_some_and(|b| b.is_some())
+                    })
+                    .map(|p| (p.id, p.root_path.clone())),
+            )
             .collect();
         let codex_home = self
             .workspace
@@ -6990,7 +7012,7 @@ impl MuxalApp {
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // The overview reads each terminal's screen when it paints, so repaint
         // it every tick to keep its previews current.
-        if self.show_dashboard {
+        if self.show_dashboard || self.peek.is_some() {
             cx.notify();
         }
         // Remember the grid each pane settled at, so a restart respawns its program
@@ -12849,6 +12871,7 @@ impl MuxalApp {
     /// Focus an instance, switching to its project first if needed. A maximize on
     /// screen moves to it (see [`maximize_after_select`]).
     fn select_instance(&mut self, iid: Uuid, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_peek(cx);
         let target_pid = self.workspace.instance(iid).map(|i| i.project_id);
         let target_in_layout = target_pid
             .and_then(|pid| self.workspace.project(pid))
@@ -14337,6 +14360,24 @@ impl MuxalApp {
                                 this.toggle_auto_continue(iid, cx)
                             }))
                     }))
+                    // Uncommitted files in this pane's checkout (its worktree,
+                    // else the project), so a glance shows which agents have
+                    // touched code. Refreshed with the sidebar's worktree counts.
+                    .children(
+                        (kind == InstanceKind::Terminal)
+                            .then(|| {
+                                let key = inst.and_then(|i| i.worktree_id.or(Some(i.project_id)))?;
+                                self.worktree_changes.get(&key).copied().filter(|n| *n > 0)
+                            })
+                            .flatten()
+                            .map(|n| {
+                                div()
+                                    .flex_none()
+                                    .text_size(rems(0.6875 * strip_scale))
+                                    .text_color(header_text)
+                                    .child(format!("±{n}"))
+                            }),
+                    )
                     .children((kind == InstanceKind::Terminal).then(|| {
                         Button::new(SharedString::from(format!("diff-{sid}")))
                             .ghost()
@@ -16975,6 +17016,9 @@ impl MuxalApp {
                     if !is_sel {
                         base = base.hover(move |s| s.bg(hover_col));
                     }
+                    base = base.on_hover(cx.listener(move |this, hovered: &bool, window, cx| {
+                        this.hover_instance_row(iid, *hovered, window, cx)
+                    }));
                     let row = if renaming {
                         base.on_key_down(cx.listener(|this, ev: &KeyDownEvent, _w, cx| {
                             if ev.keystroke.key == "escape" {
@@ -20619,7 +20663,7 @@ impl MuxalApp {
             .child(self.settings_label(&t("Theme"), cx))
             .child(
                 Select::new(&self.settings_ui.theme_picker)
-                    .w(rems(16.0))
+                    .w(rems(20.0))
                     .max_w_full()
                     .menu_max_h(menu_height),
             )
@@ -22316,6 +22360,7 @@ impl Render for MuxalApp {
                     .is_some()
                     .then(|| self.render_place_menu(cx)),
             )
+            .children(sidebar_width_px.and_then(|right| self.render_peek(right, cx)))
             .children(
                 self.runners_menu
                     .is_some()

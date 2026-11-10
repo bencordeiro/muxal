@@ -3,11 +3,18 @@
 //! one glance answers "what is everything doing?" across projects. Clicking a
 //! tile jumps to that pane.
 //!
+//! The same tile serves the sidebar peek: rest the pointer on an agent's row
+//! and its tile floats beside the sidebar until the pointer leaves.
+//!
 //! Previews are plain text read from each terminal's screen when the overview
-//! paints; `MuxalApp::tick` repaints it once a second while it is open, and it
-//! costs nothing while closed.
+//! paints; `MuxalApp::tick` repaints it once a second while it or a peek is showing;
+//! neither costs anything otherwise.
 
 use super::*;
+
+/// How long the pointer rests on a sidebar row before its peek appears —
+/// long enough that sweeping across the list shows nothing.
+const PEEK_DELAY: Duration = Duration::from_millis(450);
 
 /// Rows of terminal text in a tile.
 const PREVIEW_ROWS: usize = 10;
@@ -15,11 +22,33 @@ const PREVIEW_ROWS: usize = 10;
 /// the text handed to layout for a very wide terminal.
 const PREVIEW_COLS: usize = 160;
 
-/// The bottom of a terminal screen as preview rows: rows right-trimmed,
-/// trailing blank rows dropped (an agent's screen ends at its prompt, not at
-/// the grid's last line), then the last `max_rows`, each cut to `max_cols`.
+/// True for a row that is only decoration: a horizontal rule or the top or
+/// bottom edge of a box (`────`, `╭──╮`, `====`), with nothing to read in it.
+fn is_rule(row: &str) -> bool {
+    let mut marks = 0;
+    for c in row.chars() {
+        match c {
+            ' ' => {}
+            '-' | '_' | '=' | '~' | '\u{2500}'..='\u{257F}' => marks += 1,
+            _ => return false,
+        }
+    }
+    marks >= 3
+}
+
+/// The bottom of a terminal screen as preview rows. A tile has few rows and an
+/// agent's screen ends in an empty input box and rules, so the rows are spent
+/// on what can be read: decoration-only rows are dropped, runs of blank rows
+/// collapse to one, and trailing blanks go. Then the last `max_rows` are kept,
+/// right-trimmed and cut to `max_cols`.
 fn preview_rows(screen: &str, max_rows: usize, max_cols: usize) -> Vec<String> {
-    let mut rows: Vec<&str> = screen.lines().map(str::trim_end).collect();
+    let mut rows: Vec<&str> = Vec::new();
+    for row in screen.lines().map(str::trim_end) {
+        if is_rule(row) || (row.is_empty() && rows.last().is_none_or(|last| last.is_empty())) {
+            continue;
+        }
+        rows.push(row);
+    }
     while rows.last().is_some_and(|row| row.is_empty()) {
         rows.pop();
     }
@@ -167,8 +196,7 @@ impl MuxalApp {
         container.into_any_element()
     }
 
-    /// One agent: a small pane — header (icon in its status color, title,
-    /// status) over the bottom rows of its terminal.
+    /// An overview tile: the agent's tile, clickable to jump to its pane.
     fn overview_tile(
         &self,
         pid: Uuid,
@@ -178,6 +206,111 @@ impl MuxalApp {
         row_h: Rems,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let hover_border = cx.theme().primary;
+        self.agent_tile("overview", iid, now, mono, row_h, cx)
+            .cursor_pointer()
+            .hover(move |s| s.border_color(hover_border))
+            .on_click(cx.listener(move |this, _ev, window, cx| {
+                this.show_dashboard = false;
+                this.select_project(pid, window, cx);
+                this.focus_instance(iid, window, cx);
+            }))
+            .into_any_element()
+    }
+
+    /// The pointer entered or left an agent's sidebar row. Resting on a row
+    /// shows that agent's tile beside the sidebar ([`Self::render_peek`]):
+    /// a look at a pane without switching to it. Nothing is read until the
+    /// tile is showing, and leaving the row drops it.
+    pub(super) fn hover_instance_row(
+        &mut self,
+        iid: Uuid,
+        hovered: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !hovered {
+            if self.peek_pending == Some(iid) || self.peek.is_some_and(|(shown, _)| shown == iid) {
+                self.cancel_peek(cx);
+            }
+            return;
+        }
+        // Only a live terminal other than the one already focused, and only
+        // in the main window, which is where the tile is drawn.
+        if !self.is_main_window(window)
+            || !self.terminals.contains_key(&iid)
+            || self.active_instance == Some(iid)
+            || cx.has_active_drag()
+        {
+            return;
+        }
+        self.peek_generation += 1;
+        let generation = self.peek_generation;
+        self.peek_pending = Some(iid);
+        let y = window.mouse_position().y;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(PEEK_DELAY).await;
+            this.update(cx, |this, cx| {
+                if this.peek_generation == generation && this.peek_pending == Some(iid) {
+                    this.peek_pending = None;
+                    this.peek = Some((iid, y));
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Drop a showing or pending peek (pointer left, row clicked).
+    pub(super) fn cancel_peek(&mut self, cx: &mut Context<Self>) {
+        self.peek_pending = None;
+        self.peek_generation += 1;
+        if self.peek.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    /// The peek tile, floating just right of the sidebar at the height of the
+    /// hovered row (kept inside the window). It takes no clicks or focus.
+    pub(super) fn render_peek(
+        &self,
+        sidebar_right: Pixels,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let (iid, y) = self.peek?;
+        if cx.has_active_drag() || !self.terminals.contains_key(&iid) {
+            return None;
+        }
+        let now = chrono::Utc::now().timestamp_millis();
+        let mono =
+            muxal_terminal::resolve_mono_family(cx.text_system(), self.settings.font_family.trim());
+        let tile = self
+            .agent_tile("peek", iid, now, &mono, rems(0.9375), cx)
+            .shadow_lg();
+        Some(
+            deferred(
+                anchored()
+                    .position(point(sidebar_right + px(8.0), y - px(40.0)))
+                    .snap_to_window_with_margin(px(8.0))
+                    .child(tile),
+            )
+            .into_any_element(),
+        )
+    }
+
+    /// One agent as a small pane — header (icon in its status color, title,
+    /// status) over the bottom rows of its terminal. Shared by the overview
+    /// grid and the sidebar peek; `scope` keeps their element ids apart.
+    fn agent_tile(
+        &self,
+        scope: &str,
+        iid: Uuid,
+        now: i64,
+        mono: &SharedString,
+        row_h: Rems,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
         let zones = crate::theme::zones(cx);
         let inst = self.workspace.instance(iid);
         let program = inst.and_then(|i| i.program.clone());
@@ -265,10 +398,9 @@ impl MuxalApp {
             );
         }
 
-        let hover_border = cx.theme().primary;
         let path_title = title_is_path(&title);
         div()
-            .id(SharedString::from(format!("overview-{}", iid.simple())))
+            .id(SharedString::from(format!("{scope}-{}", iid.simple())))
             .w(rems(24.0))
             .flex_none()
             .flex()
@@ -277,13 +409,6 @@ impl MuxalApp {
             .border_1()
             .border_color(border)
             .overflow_hidden()
-            .cursor_pointer()
-            .hover(move |s| s.border_color(hover_border))
-            .on_click(cx.listener(move |this, _ev, window, cx| {
-                this.show_dashboard = false;
-                this.select_project(pid, window, cx);
-                this.focus_instance(iid, window, cx);
-            }))
             .child(
                 div()
                     .flex_none()
@@ -316,7 +441,6 @@ impl MuxalApp {
                     .child(div().flex_none().child(status_el)),
             )
             .child(body)
-            .into_any_element()
     }
 }
 
@@ -326,11 +450,32 @@ mod tests {
 
     #[test]
     fn keeps_the_bottom_rows_and_drops_the_blank_tail() {
-        let screen = "one  \ntwo\n\nthree\n   \n\n";
+        let screen = "one  \ntwo\n\n\nthree\n   \n\n";
         assert_eq!(preview_rows(screen, 3, 80), vec!["two", "", "three"]);
         assert_eq!(
             preview_rows(screen, 10, 80),
             vec!["one", "two", "", "three"]
+        );
+    }
+
+    #[test]
+    fn rules_and_repeated_blanks_give_their_rows_to_content() {
+        let screen = "reply line 1\nreply line 2\n\n\n────────────\n\n────────────\n\n~/code/app\n↑4.6k ↓2.8k\n";
+        assert_eq!(
+            preview_rows(screen, 10, 80),
+            vec![
+                "reply line 1",
+                "reply line 2",
+                "",
+                "~/code/app",
+                "↑4.6k ↓2.8k"
+            ]
+        );
+        // Box edges go; a box row with text in it stays, as does a list item.
+        let boxed = "╭──────╮\n│ > hi │\n╰──────╯\n- item\n--\n";
+        assert_eq!(
+            preview_rows(boxed, 10, 80),
+            vec!["│ > hi │", "- item", "--"]
         );
     }
 
