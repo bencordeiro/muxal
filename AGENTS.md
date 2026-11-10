@@ -267,14 +267,28 @@ add a new `##` category if none fits).
 
 ## Where things stand (update this section when it changes)
 
-**v0.5.9 release preparation (2026-11-09):** The owner completed design
-review in dev and explicitly requested committing the final work, bumping the
-version, and publishing the normal release with a detailed changelog. Branch
-`dev/chrome-refinement` contains the earlier design round in `2dc4ced` and the
-final swatches, change counts, hover peeks, and preview filtering in `8882d40`.
-Version-bump verification and publication are in progress. Verify published
-packages before normal promotion; never restart the owner's windows. The owner
-asked for a sidebar/top-bar refinement pass and reviews it in `scripts/dev.sh`. Top bar is
+**v0.5.9 published and verified (2026-11-09):** The owner completed design
+review in dev and requested the normal release with a detailed changelog. Tag
+`v0.5.9` is at `804335f`; master remains at that verified release commit. The
+remaining design work is committed in `8882d40`, following `2dc4ced`, and both
+master and `dev/chrome-refinement` are pushed to origin. Release run
+`42743406690` and full CI run `42743406971` passed. The first ARM package-build
+attempt hit a partial crates.io download; retrying failed jobs succeeded without
+changing code or moving the tag.
+
+All ten downloaded package checksums pass, with zero failures. The published
+Linux binary reports 0.5.9, resolves libraries, and retains GLIBC 2.35. Both .deb
+versions are 0.5.9-1 with the ALSA t64/old alternatives intact. The universal Mac
+bundle contains Intel and Apple Silicon binaries, with both bundle versions at
+0.5.9. Published notes exactly match the detailed CHANGELOG entry, audited
+against the full diff since v0.5.8 and FEATURES. The local version-bump gate
+passes 654 active tests (one ignored), formatting, strict Clippy, build, the
+705-key translation check, and isolated-HOME launch smoke. Native Mac CI passes
+647 active tests, zero failures (one ignored).
+
+Installed main remains 0.5.8; explicit approval for local promotion has been
+requested separately. Never restart the owner's windows. Verification notes
+are recorded on the development branch. The owner asked for a sidebar/top-bar refinement pass and reviews it in `scripts/dev.sh`. Top bar is
 grouped with hairlines (launch + tmux/worktree options, saved prompts, Restart,
 pins; right: Search, git diff + dashboard, then app controls); the duplicate
 top-bar Close pane button is removed; Restart, Snippets, workspaces, and memory
